@@ -9,6 +9,24 @@ import requests
 API_BASE_URL = "https://api.mercadopago.com"
 EXTERNAL_REFERENCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+# Values published for Argentina (MLA) by the Point Orders simulation schema.
+SIMULATION_CREDIT_METHOD_IDS = (
+    "amex", "argencard", "cabal", "cencosud", "cmr", "diners", "master",
+    "naranja", "visa",
+)
+SIMULATION_DEBIT_METHOD_IDS = ("debcabal", "debmaster", "debvisa")
+SIMULATION_REJECTION_DETAILS = (
+    "bad_filled_card_data",
+    "required_call_for_authorize",
+    "card_disabled",
+    "high_risk",
+    "insufficient_amount",
+    "invalid_installments",
+    "max_attempts_exceeded",
+    "rejected_other_reason",
+    "processing_error",
+)
+
 
 def _is_uncertain_post_status(method, status_code):
     """Return whether an HTTP result can hide a completed remote POST."""
@@ -61,6 +79,63 @@ def build_point_order_payload(external_reference, amount_text, terminal_id):
     }
 
 
+def build_simulation_event_payload(
+    scenario,
+    payment_method_type=None,
+    payment_method_id=None,
+    installments=None,
+    status_detail=None,
+):
+    """Build only combinations allowed by the official TEST event schema.
+
+    This payload never changes local Order state. It is sent to Mercado Pago's
+    TEST-only event endpoint and must be followed by a GET of the Order.
+    """
+    if scenario == "canceled":
+        if any((payment_method_type, payment_method_id, installments, status_detail)):
+            raise ValueError("Canceled simulation only accepts the canceled status.")
+        return {"status": "canceled"}
+    if scenario not in {"approved", "rejected"}:
+        raise ValueError("Invalid Point simulation scenario.")
+    if payment_method_type not in {"credit_card", "debit_card", "qr"}:
+        raise ValueError("Invalid Point simulation payment method type.")
+
+    payload = {
+        "status": "processed" if scenario == "approved" else "failed",
+        "payment_method_type": payment_method_type,
+    }
+    if payment_method_type == "credit_card":
+        if payment_method_id not in SIMULATION_CREDIT_METHOD_IDS:
+            raise ValueError("Invalid credit card payment method ID for Argentina.")
+        try:
+            installment_decimal = Decimal(str(installments))
+            installment_count = int(installment_decimal)
+        except (InvalidOperation, TypeError, ValueError) as error:
+            raise ValueError("Credit card installments must be a positive integer.") from error
+        if installment_count < 1 or installment_decimal != installment_count:
+            raise ValueError("Credit card installments must be a positive integer.")
+        payload.update({
+            "payment_method_id": payment_method_id,
+            "installments": installment_count,
+        })
+    elif payment_method_type == "debit_card":
+        if payment_method_id not in SIMULATION_DEBIT_METHOD_IDS:
+            raise ValueError("Invalid debit card payment method ID for Argentina.")
+        payload["payment_method_id"] = payment_method_id
+    elif payment_method_id or installments:
+        raise ValueError("QR simulation does not accept a card brand or installments.")
+
+    if scenario == "approved":
+        if status_detail not in (None, False, "accredited"):
+            raise ValueError("The only valid approved status detail is accredited.")
+        payload["status_detail"] = "accredited"
+    else:
+        if status_detail not in SIMULATION_REJECTION_DETAILS:
+            raise ValueError("Invalid Point simulation rejection detail.")
+        payload["status_detail"] = status_detail
+    return payload
+
+
 class MercadoPagoOrdersClient:
     """HTTP client that never logs or exposes the Access Token."""
 
@@ -75,7 +150,15 @@ class MercadoPagoOrdersClient:
         message = str(value or "Mercado Pago request failed.")
         return message.replace(self._access_token, "***")
 
-    def _request(self, method, endpoint, expected_status, payload=None, idempotency_key=None):
+    def _request(
+        self,
+        method,
+        endpoint,
+        expected_status,
+        payload=None,
+        idempotency_key=None,
+        expect_json=True,
+    ):
         headers = {
             "Authorization": "Bearer %s" % self._access_token,
             "Content-Type": "application/json",
@@ -102,6 +185,9 @@ class MercadoPagoOrdersClient:
                 code="request_error",
                 uncertain=method == "POST",
             ) from error
+
+        if response.status_code == expected_status and not expect_json:
+            return None
 
         try:
             response_data = response.json()
@@ -157,4 +243,15 @@ class MercadoPagoOrdersClient:
             "GET",
             "/v1/orders/%s" % order_id,
             expected_status=200,
+        )
+
+    def simulate_order_event(self, order_id, payload):
+        if not order_id:
+            raise ValueError("Order ID is required.")
+        return self._request(
+            "POST",
+            "/v1/orders/%s/events" % order_id,
+            expected_status=204,
+            payload=payload,
+            expect_json=False,
         )

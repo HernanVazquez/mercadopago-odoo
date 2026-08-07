@@ -86,7 +86,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "MercadoPagoOrdersClient.create_order",
             autospec=True,
         ) as create_order, patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
         ) as get_order:
@@ -112,7 +112,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "MercadoPagoOrdersClient.create_order",
             autospec=True,
         ) as create_order, patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
         ) as get_order:
@@ -183,9 +183,14 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             autospec=True,
             side_effect=create_order,
         ):
-            payment.action_mercadopago_point_send()
+            tracking_action = payment.action_mercadopago_point_send()
 
         attempt = payment.mercadopago_point_order_ids
+        self.assertEqual(
+            tracking_action["res_model"],
+            "mercadopago.point.tracking.wizard",
+        )
+        self.assertEqual(tracking_action["target"], "new")
         self.assertEqual(len(attempt), 1)
         self.assertEqual(attempt.requested_amount_text, "123.45")
         self.assertFalse(attempt.is_verified_success)
@@ -193,7 +198,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             payment._mercadopago_point_validate_before_post()
 
         with patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
             return_value=self._processed_response(attempt),
@@ -207,7 +212,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "MercadoPagoOrdersClient.create_order",
             autospec=True,
         ) as create_order, patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
         ) as get_order:
@@ -236,7 +241,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "MercadoPagoOrdersClient.create_order",
             autospec=True,
         ) as create_order, patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
         ) as get_order:
@@ -267,7 +272,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "MercadoPagoOrdersClient.create_order",
             autospec=True,
         ) as create_order, patch(
-            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
             "MercadoPagoOrdersClient.get_order",
             autospec=True,
         ) as get_order:

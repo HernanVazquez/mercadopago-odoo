@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_mercadopago_point_tracking_wizard_form" model="ir.ui.view">
+        <field name="name">mercadopago.point.tracking.wizard.form</field>
+        <field name="model">mercadopago.point.tracking.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Cobro Mercado Pago Point" create="false" edit="false">
+                <field name="order_id" invisible="1"/>
+                <field name="tracking_widget"
+                       widget="mercadopago_point_tracking"
+                       nolabel="1"
+                       colspan="2"/>
+                <footer>
+                    <button string="Cerrar" special="cancel" class="btn-primary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="mercadopago_point_odoo.PointTracking" owl="1">
+        <div class="o_mercadopago_point_tracking">
+            <t t-if="!state.snapshot">
+                <div class="text-center py-4">
+                    <h3>Esperando pago</h3>
+                    <i class="fa fa-spinner fa-spin" aria-label="Cargando"/>
+                </div>
+            </t>
+            <t t-else="">
+                <div t-att-class="'o_point_status o_point_status_' + state.snapshot.status">
+                    <h2 t-esc="state.snapshot.display_status"/>
+                    <span t-if="state.busy" class="fa fa-spinner fa-spin ms-2"/>
+                    <p t-if="state.snapshot.rejection_message"
+                       class="text-danger mb-0"
+                       t-esc="state.snapshot.rejection_message"/>
+                </div>
+
+                <div class="o_point_summary">
+                    <div><span>Importe</span><strong><t t-esc="state.snapshot.requested_amount"/> <t t-esc="state.snapshot.currency"/></strong></div>
+                    <div><span>Intento</span><strong>#<t t-esc="state.snapshot.attempt_number"/></strong></div>
+                    <div><span>Tiempo transcurrido</span><strong t-esc="elapsedText"/></div>
+                    <div><span>Estado de Order</span><strong t-esc="state.snapshot.status"/></div>
+                    <div t-if="state.snapshot.payment_status"><span>Estado del pago</span><strong t-esc="state.snapshot.payment_status"/></div>
+                    <div t-if="state.snapshot.paid_amount"><span>Importe pagado</span><strong><t t-esc="state.snapshot.paid_amount"/> <t t-esc="state.snapshot.currency"/></strong></div>
+                    <div t-if="state.snapshot.payment_method_type"><span>Medio</span><strong t-esc="state.snapshot.payment_method_type"/></div>
+                    <div t-if="state.snapshot.payment_method_id"><span>Marca / ID</span><strong t-esc="state.snapshot.payment_method_id"/></div>
+                    <div t-if="state.snapshot.installments"><span>Cuotas</span><strong t-esc="state.snapshot.installments"/></div>
+                </div>
+
+                <div t-if="state.snapshot.poll_error || state.stopped" class="alert alert-warning mt-3">
+                    <div>La consulta automática encontró errores. Se conserva el último estado conocido; esto no significa que el pago haya sido rechazado.</div>
+                    <small t-if="state.snapshot.poll_error" t-esc="state.snapshot.poll_error"/>
+                    <button type="button" class="btn btn-outline-primary btn-sm d-block mt-2"
+                            t-on-click="manualPoll" t-att-disabled="state.busy">
+                        Consultar ahora
+                    </button>
+                </div>
+
+                <div t-if="state.snapshot.is_test &amp;&amp; state.snapshot.can_simulate"
+                     class="o_point_test_simulator mt-4">
+                    <h4>Simulador Mercado Pago TEST</h4>
+                    <p class="text-muted">El resultado se envía a Mercado Pago TEST y luego se consulta nuevamente la Order.</p>
+                    <div class="o_point_simulator_grid">
+                        <label>Escenario
+                            <select class="form-select" t-model="state.scenario">
+                                <option value="approved">Aprobado</option>
+                                <option value="rejected">Rechazado</option>
+                                <option value="canceled">Cancelado</option>
+                            </select>
+                        </label>
+                        <label t-if="state.scenario !== 'canceled'">Medio
+                            <select class="form-select" t-on-change="onPaymentTypeChange">
+                                <option value="credit_card" t-att-selected="state.paymentMethodType === 'credit_card'">Crédito</option>
+                                <option value="debit_card" t-att-selected="state.paymentMethodType === 'debit_card'">Débito</option>
+                                <option value="qr" t-att-selected="state.paymentMethodType === 'qr'">QR</option>
+                            </select>
+                        </label>
+                        <label t-if="state.scenario !== 'canceled' &amp;&amp; showCardBrand">Marca
+                            <select class="form-select" t-model="state.paymentMethodId">
+                                <option t-foreach="methodOptions" t-as="method" t-key="method.value"
+                                        t-att-value="method.value" t-esc="method.label"/>
+                            </select>
+                        </label>
+                        <label t-if="state.scenario !== 'canceled' &amp;&amp; state.paymentMethodType === 'credit_card'">Cuotas
+                            <input class="form-control" type="number" min="1" step="1"
+                                   t-att-value="state.installments"
+                                   t-on-input="onInstallmentsInput"/>
+                        </label>
+                        <label t-if="state.scenario === 'rejected'">Motivo
+                            <select class="form-select" t-model="state.rejectionDetail">
+                                <option t-foreach="state.snapshot.simulation_options.rejection_details"
+                                        t-as="detail" t-key="detail.value"
+                                        t-att-value="detail.value" t-esc="detail.label"/>
+                            </select>
+                        </label>
+                    </div>
+                    <button type="button" class="btn btn-secondary mt-3"
+                            t-on-click="simulate" t-att-disabled="state.busy">
+                        Aplicar escenario TEST
+                    </button>
+                </div>
+            </t>
+        </div>
+    </t>
+</templates>

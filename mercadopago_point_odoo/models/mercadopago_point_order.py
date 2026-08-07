@@ -5,6 +5,8 @@ from decimal import Decimal, InvalidOperation
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 
+from ..services.client import MercadoPagoOrdersClient
+
 
 POINT_ORDER_STATES = [
     ("draft", "Draft"),
@@ -31,6 +33,8 @@ KNOWN_REMOTE_STATES = {
     "canceled",
     "refunded",
 }
+FINAL_REMOTE_STATES = {"processed", "failed", "expired", "canceled", "refunded"}
+SIMULATABLE_REMOTE_STATES = {"created", "at_terminal", "action_required"}
 
 
 def _decimal_equal(left, right):
@@ -256,6 +260,58 @@ class MercadoPagoPointOrder(models.Model):
             })
         self.write(values)
         return self
+
+    def _mercadopago_point_client(self):
+        """Build a backend-only client without returning or logging credentials."""
+        self.ensure_one()
+        secure_config = self.config_id.sudo()
+        return MercadoPagoOrdersClient(
+            secure_config.access_token,
+            timeout=secure_config.timeout_seconds,
+        )
+
+    def _refresh_from_api(self):
+        """GET and verify this attempt without changing any accounting state."""
+        self.ensure_one()
+        if self.config_id.environment != "test":
+            raise UserError(_("Production is disabled in the current implementation stage."))
+        if not self.mp_order_id:
+            raise UserError(_("The Point attempt does not have a Mercado Pago Order ID."))
+        response_data = self._mercadopago_point_client().get_order(self.mp_order_id)
+        return self.apply_api_response(response_data, verified=True)
+
+    def _send_test_simulation_event(self, payload):
+        """Send an official TEST event; never write a simulated final state locally."""
+        self.ensure_one()
+        if self.config_id.environment != "test":
+            raise UserError(_("Point result simulation is only available in TEST."))
+        if self.payment_id.state != "draft":
+            raise UserError(_("Only draft Odoo payments can be simulated."))
+        if not self.payment_id.is_mercadopago_point:
+            raise UserError(_("The selected payment method is not Mercado Pago Point."))
+        if not self.mp_order_id:
+            raise UserError(_("Create the Mercado Pago Order before simulating its result."))
+        if self.state not in SIMULATABLE_REMOTE_STATES:
+            raise UserError(_("This Point Order no longer allows a TEST transition."))
+        self._mercadopago_point_client().simulate_order_event(self.mp_order_id, payload)
+        return True
+
+    def action_open_tracking(self):
+        self.ensure_one()
+        wizard = self.env["mercadopago.point.tracking.wizard"].create({
+            "order_id": self.id,
+        })
+        return {
+            "type": "ir.actions.act_window",
+            "name": _("Mercado Pago Point"),
+            "res_model": "mercadopago.point.tracking.wizard",
+            "res_id": wizard.id,
+            "view_mode": "form",
+            "view_id": self.env.ref(
+                "mercadopago_point_odoo.view_mercadopago_point_tracking_wizard_form"
+            ).id,
+            "target": "new",
+        }
 
     def mark_request_sent(self):
         self.ensure_one()

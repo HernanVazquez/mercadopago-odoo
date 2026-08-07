@@ -1,0 +1,46 @@
+.o_mercadopago_point_tracking {
+    width: 100%;
+    min-height: 18rem;
+
+    .o_point_status {
+        padding: 1rem;
+        border-radius: .35rem;
+        background: #f1f3f5;
+    }
+
+    .o_point_status_processed {
+        background: #d1e7dd;
+        color: #0f5132;
+    }
+
+    .o_point_status_failed,
+    .o_point_status_expired,
+    .o_point_status_canceled {
+        background: #f8d7da;
+        color: #842029;
+    }
+
+    .o_point_summary,
+    .o_point_simulator_grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+        gap: .75rem 1rem;
+        margin-top: 1rem;
+    }
+
+    .o_point_summary > div {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .o_point_summary span,
+    .o_point_simulator_grid label {
+        color: #6c757d;
+        font-size: .875rem;
+    }
+
+    .o_point_test_simulator {
+        padding-top: 1rem;
+        border-top: 1px solid #dee2e6;
+    }
+}

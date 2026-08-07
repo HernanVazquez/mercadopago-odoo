@@ -228,11 +228,10 @@ class AccountPayment(models.Model):
                 notification_type="warning",
                 sticky=True,
             )
-        return self._mercadopago_point_notification(
-            _("Mercado Pago Point"),
-            _("The exact Odoo amount %s ARS was sent to the configured Point terminal.") % amount_text,
-            notification_type="success",
-        )
+        # ``attempt`` is sudoed for its controlled backend writes. Open the
+        # transient record in the accounting user's original environment so
+        # Odoo's TransientModel ownership rules let that user read the modal.
+        return attempt.with_env(self.env).action_open_tracking()
 
     def action_mercadopago_point_refresh(self):
         """Explicitly query the latest remote Order; never post accounting entries."""
@@ -248,17 +247,10 @@ class AccountPayment(models.Model):
                 "The last request has no recoverable Order ID. Use Enviar al Point again; "
                 "it will reuse the same idempotency key."
             ))
-        config = attempt.config_id
-        if config.environment != "test":
+        if attempt.config_id.environment != "test":
             raise UserError(_("Production is disabled in Stage 1."))
-        secure_config = config.sudo()
-        client = MercadoPagoOrdersClient(
-            secure_config.access_token,
-            timeout=secure_config.timeout_seconds,
-        )
         try:
-            response_data = client.get_order(attempt.mp_order_id)
-            attempt.apply_api_response(response_data, verified=True)
+            attempt._refresh_from_api()
         except MercadoPagoClientError as error:
             attempt.write({
                 "error_code": error.code or False,

@@ -11,10 +11,76 @@ from odoo.addons.mercadopago_point_odoo.services.client import (
     MercadoPagoNetworkError,
     MercadoPagoOrdersClient,
     build_point_order_payload,
+    build_simulation_event_payload,
 )
 
 
 class TestMercadoPagoOrdersClient(TransactionCase):
+
+    def test_simulation_payloads_only_expose_documented_combinations(self):
+        self.assertEqual(
+            build_simulation_event_payload(
+                "approved", "credit_card", "visa", 3, "accredited"
+            ),
+            {
+                "status": "processed",
+                "payment_method_type": "credit_card",
+                "payment_method_id": "visa",
+                "installments": 3,
+                "status_detail": "accredited",
+            },
+        )
+        self.assertEqual(
+            build_simulation_event_payload(
+                "rejected", "qr", status_detail="high_risk"
+            ),
+            {
+                "status": "failed",
+                "payment_method_type": "qr",
+                "status_detail": "high_risk",
+            },
+        )
+        self.assertEqual(
+            build_simulation_event_payload("canceled"),
+            {"status": "canceled"},
+        )
+        with self.assertRaises(ValueError):
+            build_simulation_event_payload(
+                "approved", "debit_card", "visa", status_detail="accredited"
+            )
+
+    def test_simulate_event_accepts_official_no_content_response(self):
+        session = Mock()
+        response = Mock(status_code=204)
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        result = client.simulate_order_event("ORDER-1", {"status": "canceled"})
+
+        self.assertIsNone(result)
+        response.json.assert_not_called()
+        call = session.request.call_args
+        self.assertEqual(
+            call.args[:2],
+            ("POST", "https://api.mercadopago.com/v1/orders/ORDER-1/events"),
+        )
+        self.assertNotIn("TEST-secret-token", str(result))
+
+    def test_simulation_api_error_never_exposes_token(self):
+        session = Mock()
+        response = Mock(status_code=400)
+        response.json.return_value = {
+            "error": "bad_request_TEST-secret-token",
+            "message": "Rejected TEST-secret-token",
+        }
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.simulate_order_event("ORDER-1", {"status": "canceled"})
+
+        self.assertNotIn("TEST-secret-token", str(caught.exception))
+        self.assertNotIn("TEST-secret-token", caught.exception.code)
 
     def test_payload_amount_is_fixed_by_odoo(self):
         payload = build_point_order_payload(
