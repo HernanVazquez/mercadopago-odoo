@@ -8,6 +8,8 @@
                   decoration-success="is_verified_success"
                   decoration-warning="state in ('sent', 'uncertain', 'action_required')"
                   decoration-danger="state in ('failed', 'error')">
+                <!-- Required unrestricted by check_company's automatic payment_id domain. -->
+                <field name="company_id" invisible="1"/>
                 <field name="attempt_number"/>
                 <field name="payment_id"/>
                 <field name="external_reference"/>
@@ -39,7 +41,8 @@
                         <group string="Odoo">
                             <field name="payment_id"/>
                             <field name="attempt_number"/>
-                            <field name="company_id" groups="base.group_multi_company"/>
+                            <!-- Required unrestricted by check_company's payment_id domain. -->
+                            <field name="company_id"/>
                             <field name="external_reference"/>
                             <field name="idempotency_key" groups="base.group_system"/>
                             <field name="terminal_id"/>

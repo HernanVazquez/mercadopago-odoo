@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+from lxml import etree
+
 from odoo.exceptions import UserError, ValidationError
 from odoo.tests import tagged
 
@@ -12,6 +14,23 @@ from .common import MercadoPagoPointCommon
 
 @tagged("post_install", "-at_install")
 class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
+
+    def test_order_views_expose_company_for_check_company_domains(self):
+        order_model = self.env["mercadopago.point.order"]
+        self.assertTrue(order_model._fields["payment_id"].check_company)
+        for xml_id in (
+            "mercadopago_point_odoo.view_mercadopago_point_order_tree",
+            "mercadopago_point_odoo.view_mercadopago_point_order_form",
+        ):
+            view = self.env.ref(xml_id)
+            arch = etree.fromstring(view.arch_db.encode("utf-8"))
+            unrestricted_company_nodes = arch.xpath(
+                ".//field[@name='company_id' and not(@groups)]"
+            )
+            self.assertTrue(
+                unrestricted_company_nodes,
+                "%s must expose company_id without a group restriction" % xml_id,
+            )
 
     def _created_response(self, attempt):
         return {
