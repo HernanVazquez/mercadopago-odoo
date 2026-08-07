@@ -34,17 +34,17 @@
                 <group string="Mercado Pago Point"
                        attrs="{'invisible': [('is_mercadopago_point', '=', False)]}">
                     <field name="mercadopago_point_state" readonly="1"/>
-                    <field name="mercadopago_point_order_ids" readonly="1" nolabel="1">
+                    <field name="mercadopago_point_order_ids"
+                           readonly="1"
+                           nolabel="1"
+                           colspan="2">
                         <tree create="false" delete="false">
                             <field name="currency_id" invisible="1"/>
                             <field name="attempt_number"/>
-                            <field name="external_reference"/>
-                            <field name="mp_order_id"/>
-                            <field name="mp_payment_id"/>
                             <field name="requested_amount"/>
                             <field name="paid_amount"/>
                             <field name="status"/>
-                            <field name="payment_status_detail"/>
+                            <field name="payment_status"/>
                             <field name="is_verified_success"/>
                         </tree>
                     </field>
