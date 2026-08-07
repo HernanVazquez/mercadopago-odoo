@@ -101,6 +101,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             "payment_type": "inbound",
             "partner_type": "customer",
             "partner_id": self.partner_a.id,
+            "destination_account_id": self.receivable_account.id,
             "amount": 25.0,
             "currency_id": self.company.currency_id.id,
             "journal_id": self.journal.id,
@@ -167,7 +168,7 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
         self.assertEqual(second_attempt.attempt_number, 2)
         self.assertNotEqual(first_attempt.idempotency_key, second_attempt.idempotency_key)
 
-    def test_send_and_manual_get_enable_local_barrier(self):
+    def test_processed_accredited_point_payment_can_be_posted(self):
         payment = self._create_point_payment(123.45)
 
         def create_order(_client, payload, idempotency_key):
@@ -201,7 +202,19 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
 
         self.assertTrue(attempt.is_verified_success)
         self.assertEqual(attempt.paid_amount_text, "123.45")
-        self.assertTrue(payment._mercadopago_point_validate_before_post())
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+        ) as create_order, patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.get_order",
+            autospec=True,
+        ) as get_order:
+            payment.action_post()
+        self.assertEqual(payment.state, "posted")
+        create_order.assert_not_called()
+        get_order.assert_not_called()
 
     def test_paid_amount_difference_never_enables_posting(self):
         payment = self._create_point_payment(100.0)
@@ -218,8 +231,50 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             verified=True,
         )
         self.assertFalse(attempt.is_verified_success)
-        with self.assertRaises(UserError):
-            payment._mercadopago_point_validate_before_post()
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+        ) as create_order, patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.get_order",
+            autospec=True,
+        ) as get_order:
+            with self.assertRaises(UserError):
+                payment.action_post()
+        create_order.assert_not_called()
+        get_order.assert_not_called()
+
+    def test_wrong_external_reference_never_enables_posting(self):
+        payment = self._create_point_payment(70.0)
+        attempt = payment._mercadopago_point_prepare_attempt(
+            self.point_config,
+            "70.00",
+        )
+        attempt.write({
+            "mp_order_id": "ORDER-WRONG-REFERENCE",
+            "mp_payment_id": "PAYMENT-WRONG-REFERENCE",
+        })
+        response = self._processed_response(attempt)
+        response["external_reference"] = "unexpected-reference"
+
+        with self.assertRaises(ValidationError):
+            attempt.apply_api_response(response, verified=True)
+        self.assertFalse(attempt.is_verified_success)
+
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+        ) as create_order, patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.get_order",
+            autospec=True,
+        ) as get_order:
+            with self.assertRaises(UserError):
+                payment.action_post()
+        create_order.assert_not_called()
+        get_order.assert_not_called()
 
     def test_timeout_reuses_attempt_and_idempotency_key(self):
         payment = self._create_point_payment(50.0)
