@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
+# Entornos y configuración local
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Logs
+logs/
+*.log
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.tmp
+*.temp
+
+# Credenciales, certificados y secretos
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*credentials*
+*secret*
+*access_token*
+*webhook_token*
+
+# Backups y dumps de bases de datos
+*.bak
+*.backup
+*.dump
+*.sql
+*.sql.gz
+*.zip
+*.tar
+*.tar.gz
+
+# Copias locales de módulos usadas solamente como referencia
+references/

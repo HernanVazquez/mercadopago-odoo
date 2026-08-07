@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_mercadopago_point_order_tree" model="ir.ui.view">
+        <field name="name">mercadopago.point.order.tree</field>
+        <field name="model">mercadopago.point.order</field>
+        <field name="arch" type="xml">
+            <tree create="false" delete="false"
+                  decoration-success="is_verified_success"
+                  decoration-warning="state in ('sent', 'uncertain', 'action_required')"
+                  decoration-danger="state in ('failed', 'error')">
+                <field name="attempt_number"/>
+                <field name="payment_id"/>
+                <field name="external_reference"/>
+                <field name="mp_order_id"/>
+                <field name="mp_payment_id"/>
+                <field name="requested_amount"/>
+                <field name="paid_amount"/>
+                <field name="currency_id"/>
+                <field name="status"/>
+                <field name="payment_status"/>
+                <field name="payment_status_detail"/>
+                <field name="is_verified_success"/>
+                <field name="last_sync_at"/>
+                <field name="state" invisible="1"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_mercadopago_point_order_form" model="ir.ui.view">
+        <field name="name">mercadopago.point.order.form</field>
+        <field name="model">mercadopago.point.order</field>
+        <field name="arch" type="xml">
+            <form string="Mercado Pago Point Attempt" create="false" edit="false" delete="false">
+                <header>
+                    <field name="state" widget="statusbar"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Odoo">
+                            <field name="payment_id"/>
+                            <field name="attempt_number"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="external_reference"/>
+                            <field name="idempotency_key" groups="base.group_system"/>
+                            <field name="terminal_id"/>
+                        </group>
+                        <group string="Mercado Pago">
+                            <field name="mp_order_id"/>
+                            <field name="mp_payment_id"/>
+                            <field name="status"/>
+                            <field name="status_detail"/>
+                            <field name="payment_status"/>
+                            <field name="payment_status_detail"/>
+                            <field name="is_verified_success"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Exact amount controlled by Odoo">
+                            <field name="requested_amount"/>
+                            <field name="requested_amount_text" groups="base.group_system"/>
+                            <field name="paid_amount"/>
+                            <field name="paid_amount_text" groups="base.group_system"/>
+                            <field name="currency_id"/>
+                        </group>
+                        <group string="Actual payment method">
+                            <field name="payment_method_type"/>
+                            <field name="payment_method_id"/>
+                            <field name="installments"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Verification">
+                            <field name="sent_at"/>
+                            <field name="last_sync_at"/>
+                            <field name="verified_at"/>
+                            <field name="reference_verified"/>
+                            <field name="network_result_uncertain"/>
+                        </group>
+                        <group string="Last error">
+                            <field name="error_code"/>
+                            <field name="error_message"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_mercadopago_point_order" model="ir.actions.act_window">
+        <field name="name">Mercado Pago Point Attempts</field>
+        <field name="res_model">mercadopago.point.order</field>
+        <field name="view_mode">tree,form</field>
+        <field name="context">{'create': False}</field>
+    </record>
+</odoo>

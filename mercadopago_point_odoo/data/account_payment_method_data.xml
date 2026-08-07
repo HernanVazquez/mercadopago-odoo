@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!--
+        This creates only the master inbound method.  The Python model prevents
+        Odoo's normal multi-method auto-assignment during this creation.  An
+        administrator must explicitly add it to the intended journal under
+        Incoming Payments and select the Point configuration/terminal.
+    -->
+    <record id="account_payment_method_mercadopago_point" model="account.payment.method">
+        <field name="name">Mercado Pago Point</field>
+        <field name="code">mercadopago_point</field>
+        <field name="payment_type">inbound</field>
+    </record>
+</odoo>
