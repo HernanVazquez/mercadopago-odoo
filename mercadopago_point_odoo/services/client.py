@@ -1,5 +1,6 @@
 """Small, model-independent HTTP client for Mercado Pago Point Orders API."""
 
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 import re
 
@@ -8,6 +9,10 @@ import requests
 
 API_BASE_URL = "https://api.mercadopago.com"
 EXTERNAL_REFERENCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+TECHNICAL_ERROR_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+UNSAFE_CONTENT_TYPE_RE = re.compile(r"[^A-Za-z0-9!#$&^_.+\-;/= ]")
+MAX_ERROR_MESSAGE_LENGTH = 512
+MAX_CONTENT_TYPE_LENGTH = 128
 
 # Values published for Argentina (MLA) by the Point Orders simulation schema.
 SIMULATION_CREDIT_METHOD_IDS = (
@@ -150,6 +155,86 @@ class MercadoPagoOrdersClient:
         message = str(value or "Mercado Pago request failed.")
         return message.replace(self._access_token, "***")
 
+    def _sanitize_message(self, value):
+        """Return one bounded line without ever exposing the configured token."""
+        message = self._sanitize(value).replace("\r", " ").replace("\n", " ")
+        return message[:MAX_ERROR_MESSAGE_LENGTH]
+
+    def _safe_technical_code(self, value, status_code):
+        """Accept only bounded scalar API codes made of technical characters."""
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            candidate = self._sanitize(str(value)).strip()
+            if TECHNICAL_ERROR_CODE_RE.fullmatch(candidate):
+                return candidate
+        return "http_%s" % status_code
+
+    def _extract_api_error(self, response_data, status_code):
+        """Extract supported Mercado Pago error shapes without retaining the body."""
+        code_value = None
+        for key in ("errorKey", "code", "error"):
+            value = response_data.get(key)
+            if isinstance(value, (str, int)) and not isinstance(value, bool):
+                code_value = value
+                break
+
+        nested_error = None
+        errors = response_data.get("errors")
+        if isinstance(errors, list):
+            for item in errors:
+                if not isinstance(item, dict):
+                    continue
+                nested_code = next((
+                    item.get(key)
+                    for key in ("errorKey", "code", "error")
+                    if isinstance(item.get(key), (str, int))
+                    and not isinstance(item.get(key), bool)
+                ), None)
+                nested_message = item.get("message")
+                if nested_code is not None or isinstance(nested_message, str):
+                    nested_error = item
+                    if code_value is None:
+                        code_value = nested_code
+                    break
+
+        error_code = self._safe_technical_code(code_value, status_code)
+        message_value = response_data.get("message")
+        if not isinstance(message_value, str) and nested_error:
+            message_value = nested_error.get("message")
+        if not isinstance(message_value, str) or not message_value.strip():
+            message_value = "Mercado Pago rejected the request."
+        return error_code, self._sanitize_message(message_value)
+
+    def _safe_response_metadata(self, response):
+        """Format an allowlisted response summary; never include body or request data."""
+        try:
+            status_code = int(response.status_code)
+        except (TypeError, ValueError):
+            status_code = 0
+
+        headers = response.headers if isinstance(response.headers, Mapping) else {}
+        raw_content_type = headers.get("Content-Type") or headers.get("content-type") or ""
+        content_type = self._sanitize(str(raw_content_type))
+        content_type = UNSAFE_CONTENT_TYPE_RE.sub("?", content_type)
+        content_type = content_type[:MAX_CONTENT_TYPE_LENGTH] or "not_provided"
+
+        raw_content_length = headers.get("Content-Length") or headers.get("content-length")
+        declared_length = None
+        if isinstance(raw_content_length, (str, int)) and not isinstance(raw_content_length, bool):
+            candidate = str(raw_content_length).strip()
+            if candidate.isdigit() and len(candidate) <= 20:
+                declared_length = int(candidate)
+
+        content = response.content
+        received_bytes = len(content) if isinstance(content, (bytes, bytearray)) else 0
+        parts = [
+            "HTTP %s" % status_code,
+            "Content-Type=%s" % content_type,
+        ]
+        if declared_length is not None:
+            parts.append("Content-Length=%s" % declared_length)
+        parts.append("received_bytes=%s" % received_bytes)
+        return "; ".join(parts)
+
     def _request(
         self,
         method,
@@ -177,7 +262,7 @@ class MercadoPagoOrdersClient:
             raise MercadoPagoNetworkError(
                 self._sanitize("Could not confirm the Mercado Pago network response."),
                 code="network_error",
-                uncertain=method == "POST",
+                uncertain=method.upper() == "POST",
             ) from error
         except requests.exceptions.RequestException as error:
             raise MercadoPagoNetworkError(
@@ -193,11 +278,15 @@ class MercadoPagoOrdersClient:
             response_data = response.json()
         except ValueError as error:
             raise MercadoPagoAPIError(
-                "Mercado Pago returned an invalid JSON response.",
+                self._sanitize_message(
+                    "Mercado Pago returned an invalid JSON response (%s)."
+                    % self._safe_response_metadata(response)
+                ),
                 code="invalid_json",
-                uncertain=(
-                    method == "POST" and 200 <= response.status_code < 300
-                ) or _is_uncertain_post_status(method, response.status_code),
+                # Every POST in this client mutates remote state. Once an HTTP
+                # response cannot be interpreted, its remote outcome is unknown
+                # regardless of the status returned by an API or intermediary.
+                uncertain=method == "POST",
             ) from error
 
         if not isinstance(response_data, dict):
@@ -213,11 +302,12 @@ class MercadoPagoOrdersClient:
                 ),
             )
         if response.status_code != expected_status:
-            error_code = response_data.get("error") or response_data.get("code") or response.status_code
-            error_message = response_data.get("message") or "Mercado Pago rejected the request."
+            error_code, error_message = self._extract_api_error(
+                response_data, response.status_code
+            )
             raise MercadoPagoAPIError(
-                self._sanitize(error_message),
-                code=self._sanitize(str(error_code)),
+                error_message,
+                code=error_code,
                 # A POST conflict can mean the key/reference reached Mercado
                 # Pago even though Odoo has not recovered the Order ID yet.
                 # Keep the same attempt/key instead of risking a duplicate.

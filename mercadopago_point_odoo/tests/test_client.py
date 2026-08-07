@@ -17,6 +17,14 @@ from odoo.addons.mercadopago_point_odoo.services.client import (
 
 class TestMercadoPagoOrdersClient(TransactionCase):
 
+    @staticmethod
+    def _invalid_json_response(status_code, body=b"", headers=None):
+        response = Mock(status_code=status_code)
+        response.headers = headers or {}
+        response.content = body
+        response.json.side_effect = ValueError("invalid response")
+        return response
+
     def test_simulation_payloads_only_expose_documented_combinations(self):
         self.assertEqual(
             build_simulation_event_payload(
@@ -145,6 +153,7 @@ class TestMercadoPagoOrdersClient(TransactionCase):
             client.create_order({"type": "point"}, "fixed-key")
 
         self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code, "conflict")
 
     def test_post_http_timeout_is_uncertain(self):
         session = Mock()
@@ -157,11 +166,11 @@ class TestMercadoPagoOrdersClient(TransactionCase):
             client.create_order({"type": "point"}, "fixed-key")
 
         self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(caught.exception.code, "request_timeout")
 
     def test_post_server_error_with_invalid_json_is_uncertain(self):
         session = Mock()
-        response = Mock(status_code=502)
-        response.json.side_effect = ValueError("invalid response")
+        response = self._invalid_json_response(502, body=b"Bad gateway")
         session.request.return_value = response
         client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
 
@@ -169,6 +178,161 @@ class TestMercadoPagoOrdersClient(TransactionCase):
             client.create_order({"type": "point"}, "fixed-key")
 
         self.assertTrue(caught.exception.uncertain)
+
+    def test_post_403_html_is_invalid_json_and_uncertain_with_safe_metadata(self):
+        session = Mock()
+        secret_body = (
+            b"<html>private proxy body TEST-secret-token fixed-key must not persist</html>"
+        )
+        response = self._invalid_json_response(
+            403,
+            body=secret_body,
+            headers={
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Length": str(len(secret_body)),
+                "Authorization": "Bearer TEST-secret-token",
+                "X-Idempotency-Key": "fixed-key",
+            },
+        )
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        error = caught.exception
+        self.assertEqual(error.code, "invalid_json")
+        self.assertTrue(error.uncertain)
+        self.assertIn("HTTP 403", str(error))
+        self.assertIn("Content-Type=text/html; charset=utf-8", str(error))
+        self.assertIn("Content-Length=%s" % len(secret_body), str(error))
+        self.assertIn("received_bytes=%s" % len(secret_body), str(error))
+        self.assertNotIn("TEST-secret-token", str(error))
+        self.assertNotIn("fixed-key", str(error))
+        self.assertNotIn("private proxy body", str(error))
+        self.assertNotIn("Authorization", str(error))
+
+    def test_post_429_empty_body_is_uncertain(self):
+        session = Mock()
+        response = self._invalid_json_response(
+            429,
+            body=b"",
+            headers={
+                "Content-Type": "text/html",
+                "Content-Length": "not-a-number",
+            },
+        )
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        self.assertEqual(caught.exception.code, "invalid_json")
+        self.assertTrue(caught.exception.uncertain)
+        self.assertIn("HTTP 429", str(caught.exception))
+        self.assertIn("received_bytes=0", str(caught.exception))
+        self.assertNotIn("Content-Length=", str(caught.exception))
+
+    def test_post_201_empty_body_is_uncertain(self):
+        session = Mock()
+        response = self._invalid_json_response(
+            201,
+            body=b"",
+            headers={"Content-Type": "application/json; charset=utf-8"},
+        )
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        self.assertEqual(caught.exception.code, "invalid_json")
+        self.assertTrue(caught.exception.uncertain)
+        self.assertIn("HTTP 201", str(caught.exception))
+
+    def test_official_error_key_is_preserved(self):
+        session = Mock()
+        response = Mock(status_code=403)
+        response.json.return_value = {
+            "errorKey": "forbidden_checking_terminal_owner",
+        }
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        self.assertEqual(
+            caught.exception.code,
+            "forbidden_checking_terminal_owner",
+        )
+        self.assertFalse(caught.exception.uncertain)
+        self.assertNotIn("TEST-secret-token", str(caught.exception))
+
+    def test_top_level_code_and_error_are_preserved(self):
+        for field_name in ("code", "error"):
+            with self.subTest(field_name=field_name):
+                session = Mock()
+                response = Mock(status_code=400)
+                response.json.return_value = {
+                    field_name: "bad_request",
+                    "message": "Invalid request",
+                }
+                session.request.return_value = response
+                client = MercadoPagoOrdersClient(
+                    "TEST-secret-token", session=session
+                )
+
+                with self.assertRaises(MercadoPagoAPIError) as caught:
+                    client.create_order({"type": "point"}, "fixed-key")
+
+                self.assertEqual(caught.exception.code, "bad_request")
+
+    def test_post_server_json_error_keeps_existing_uncertain_behavior(self):
+        session = Mock()
+        response = Mock(status_code=500)
+        response.json.return_value = {
+            "errorKey": "idempotency_validation_failed",
+        }
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        self.assertTrue(caught.exception.uncertain)
+        self.assertEqual(
+            caught.exception.code,
+            "idempotency_validation_failed",
+        )
+
+    def test_first_valid_errors_item_is_preserved_and_sanitized(self):
+        session = Mock()
+        response = Mock(status_code=400)
+        response.json.return_value = {
+            "errors": [
+                None,
+                {"unexpected": "ignored"},
+                {
+                    "code": "terminal_not_allowed_action",
+                    "message": "Rejected TEST-secret-token",
+                    "details": "private body-like details must not persist",
+                },
+                {"code": "later_error", "message": "must not be selected"},
+            ],
+        }
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        with self.assertRaises(MercadoPagoAPIError) as caught:
+            client.create_order({"type": "point"}, "fixed-key")
+
+        self.assertEqual(caught.exception.code, "terminal_not_allowed_action")
+        self.assertIn("Rejected ***", str(caught.exception))
+        self.assertNotIn("TEST-secret-token", str(caught.exception))
+        self.assertNotIn("private body-like details", str(caught.exception))
+        self.assertNotIn("later_error", str(caught.exception))
 
     def test_api_error_never_exposes_token(self):
         session = Mock()
