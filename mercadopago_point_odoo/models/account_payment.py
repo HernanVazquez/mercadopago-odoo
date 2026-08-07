@@ -6,12 +6,16 @@ import uuid
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 
-from .account_payment_method import MERCADOPAGO_POINT_METHOD_CODE
+from .account_payment_method import (
+    MERCADOPAGO_POINT_METHOD_CODE,
+    MERCADOPAGO_QR_METHOD_CODE,
+)
 from .mercadopago_point_order import _decimal_equal
 from ..services.client import (
     MercadoPagoClientError,
     MercadoPagoOrdersClient,
     build_point_order_payload,
+    build_qr_order_payload,
 )
 
 
@@ -19,7 +23,7 @@ PENDING_OR_UNCERTAIN_STATES = {"draft", "sent", "uncertain", "created", "at_term
 
 
 def _format_exact_point_amount(amount):
-    """Return the exact two-decimal amount sent to Point, without rounding.
+    """Return the exact two-decimal amount sent to Mercado Pago, without rounding.
 
     The Point amount always comes from ``account.payment.amount``. If Odoo's
     value cannot be represented exactly with the two decimals required by the
@@ -29,12 +33,12 @@ def _format_exact_point_amount(amount):
         decimal_amount = Decimal(str(amount))
         two_decimal_amount = decimal_amount.quantize(Decimal("0.01"))
     except (InvalidOperation, TypeError, ValueError) as error:
-        raise UserError(_("The Odoo payment amount is invalid for Point.")) from error
+        raise UserError(_("The Odoo payment amount is invalid for Mercado Pago.")) from error
     if decimal_amount <= 0:
-        raise UserError(_("The Odoo payment amount sent to Point must be positive."))
+        raise UserError(_("The Odoo payment amount sent to Mercado Pago must be positive."))
     if decimal_amount != two_decimal_amount:
         raise UserError(_(
-            "The Odoo payment amount must have at most two decimals. It will not be rounded for Point."
+            "The Odoo payment amount must have at most two decimals. It will not be rounded."
         ))
     return format(two_decimal_amount, ".2f")
 
@@ -64,6 +68,12 @@ class AccountPayment(models.Model):
     is_mercadopago_point = fields.Boolean(
         compute="_compute_is_mercadopago_point",
     )
+    is_mercadopago_qr = fields.Boolean(
+        compute="_compute_is_mercadopago_point",
+    )
+    is_mercadopago_order = fields.Boolean(
+        compute="_compute_is_mercadopago_point",
+    )
     mercadopago_point_can_refresh = fields.Boolean(
         compute="_compute_mercadopago_point_display",
     )
@@ -73,10 +83,15 @@ class AccountPayment(models.Model):
         for payment in self:
             # The technical source of truth is account.payment.method.code.
             # Labels and journal names are deliberately ignored.
+            code = payment.payment_method_line_id.payment_method_id.code
             payment.is_mercadopago_point = bool(
-                payment.payment_type == "inbound"
-                and payment.payment_method_line_id.payment_method_id.code
-                == MERCADOPAGO_POINT_METHOD_CODE
+                payment.payment_type == "inbound" and code == MERCADOPAGO_POINT_METHOD_CODE
+            )
+            payment.is_mercadopago_qr = bool(
+                payment.payment_type == "inbound" and code == MERCADOPAGO_QR_METHOD_CODE
+            )
+            payment.is_mercadopago_order = bool(
+                payment.is_mercadopago_point or payment.is_mercadopago_qr
             )
 
     @api.depends(
@@ -98,37 +113,40 @@ class AccountPayment(models.Model):
             )
             payment.mercadopago_point_can_refresh = bool(current and current.mp_order_id)
 
-    def _mercadopago_point_get_config(self):
+    def _mercadopago_point_get_config(self, order_type="point"):
         self.ensure_one()
         config = self.payment_method_line_id.mercadopago_point_config_id
         if not config:
             raise UserError(_(
-                "The selected Mercado Pago Point payment method line has no backend configuration."
+                "The selected Mercado Pago payment method line has no backend configuration."
             ))
         if config.company_id != self.company_id:
-            raise UserError(_("The Point configuration belongs to another company."))
+            raise UserError(_("The Mercado Pago configuration belongs to another company."))
         if not config.active:
-            raise UserError(_("The Point configuration is inactive."))
+            raise UserError(_("The Mercado Pago configuration is inactive."))
         if config.environment != "test":
             raise UserError(_(
-                "Production is disabled in Stage 1. Select a TEST Point configuration."
+                "Production is disabled. Select a TEST Mercado Pago configuration."
             ))
+        if config.integration_type != order_type:
+            raise UserError(_("The configuration type does not match the selected payment method."))
         return config
 
-    def _mercadopago_point_validate_send(self):
+    def _mercadopago_point_validate_send(self, order_type="point"):
         self.ensure_one()
         if not self.id:
-            raise UserError(_("Save the Odoo payment before sending it to Point."))
+            raise UserError(_("Save the Odoo payment before starting the Mercado Pago Order."))
         if self.state != "draft":
-            raise UserError(_("Only draft Odoo payments can be sent to Point."))
-        if not self.is_mercadopago_point:
-            raise UserError(_("The selected payment method is not Mercado Pago Point."))
+            raise UserError(_("Only draft Odoo payments can be sent to Mercado Pago."))
+        expected = self.is_mercadopago_qr if order_type == "qr" else self.is_mercadopago_point
+        if not expected:
+            raise UserError(_("The selected payment method does not match this Mercado Pago action."))
         if self.currency_id.name != "ARS":
-            raise UserError(_("Stage 1 only supports Point payments in Argentine pesos (ARS)."))
+            raise UserError(_("This stage only supports Mercado Pago payments in Argentine pesos (ARS)."))
         amount_text = _format_exact_point_amount(self.amount)
-        return self._mercadopago_point_get_config(), amount_text
+        return self._mercadopago_point_get_config(order_type), amount_text
 
-    def _mercadopago_point_prepare_attempt(self, config, amount_text):
+    def _mercadopago_point_prepare_attempt(self, config, amount_text, order_type="point"):
         self.ensure_one()
         attempts = self.mercadopago_point_order_ids.sorted(
             key=lambda order: (order.attempt_number, order.id), reverse=True
@@ -139,24 +157,27 @@ class AccountPayment(models.Model):
                 latest.requested_amount_text != amount_text
                 or latest.currency_id != self.currency_id
                 or latest.config_id != config
-                or latest.terminal_id != config.terminal_id
+                or latest.order_type != order_type
+                or (order_type == "point" and latest.terminal_id != config.terminal_id)
+                or (order_type == "qr" and latest.external_pos_id != config.external_pos_id)
             ):
                 raise UserError(_(
-                    "The last Point request has an uncertain result. Restore its original amount "
+                    "The last Mercado Pago request has an uncertain result. Restore its original amount "
                     "and configuration before recovering it with the same idempotency key."
                 ))
             return latest.sudo()
         if latest and latest.state in PENDING_OR_UNCERTAIN_STATES:
             raise UserError(_(
-                "A Point attempt is still pending. Consult its status before starting another attempt."
+                "A Mercado Pago attempt is still pending. Consult its status before starting another attempt."
             ))
         if self.mercadopago_point_order_ids.filtered("is_verified_success"):
-            raise UserError(_("This Odoo payment already has a verified successful Point Order."))
+            raise UserError(_("This Odoo payment already has a verified successful Mercado Pago Order."))
 
         next_attempt = max(self.mercadopago_point_order_ids.mapped("attempt_number") or [0]) + 1
         return self.env["mercadopago.point.order"].sudo().create({
             "payment_id": self.id,
             "config_id": config.id,
+            "order_type": order_type,
             "attempt_number": next_attempt,
             # Human-auditable link to the Odoo payment plus random uniqueness.
             "external_reference": "odoo-ap-%s-%s" % (self.id, uuid.uuid4().hex),
@@ -164,7 +185,9 @@ class AccountPayment(models.Model):
             "currency_id": self.currency_id.id,
             "requested_amount": self.amount,
             "requested_amount_text": amount_text,
-            "terminal_id": config.terminal_id,
+            "terminal_id": config.terminal_id if order_type == "point" else False,
+            "external_pos_id": config.external_pos_id if order_type == "qr" else False,
+            "qr_mode": config.qr_mode if order_type == "qr" else False,
         })
 
     @staticmethod
@@ -188,13 +211,28 @@ class AccountPayment(models.Model):
         choose, edit, tip, or tolerate a different amount.
         """
         self.ensure_one()
-        config, amount_text = self._mercadopago_point_validate_send()
-        attempt = self._mercadopago_point_prepare_attempt(config, amount_text)
-        payload = build_point_order_payload(
-            attempt.external_reference,
-            attempt.requested_amount_text,
-            attempt.terminal_id,
-        )
+        return self._mercadopago_send("point")
+
+    def action_mercadopago_qr_send(self):
+        """Explicitly create/recover a fixed-amount hybrid QR Order."""
+        return self._mercadopago_send("qr")
+
+    def _mercadopago_send(self, order_type):
+        self.ensure_one()
+        config, amount_text = self._mercadopago_point_validate_send(order_type)
+        attempt = self._mercadopago_point_prepare_attempt(config, amount_text, order_type)
+        if order_type == "qr":
+            payload = build_qr_order_payload(
+                attempt.external_reference,
+                attempt.requested_amount_text,
+                attempt.external_pos_id,
+            )
+        else:
+            payload = build_point_order_payload(
+                attempt.external_reference,
+                attempt.requested_amount_text,
+                attempt.terminal_id,
+            )
         attempt.mark_request_sent()
         secure_config = config.sudo()
         client = MercadoPagoOrdersClient(
@@ -207,9 +245,9 @@ class AccountPayment(models.Model):
         except MercadoPagoClientError as error:
             attempt.mark_error(error.code, str(error), uncertain=error.uncertain)
             return self._mercadopago_point_notification(
-                _("Mercado Pago Point"),
+                _("Mercado Pago QR" if order_type == "qr" else "Mercado Pago Point"),
                 _(
-                    "The request result is uncertain; retry Enviar al Point to recover it with "
+                    "The request result is uncertain; retry the same send action to recover it with "
                     "the same idempotency key."
                 ) if error.uncertain else str(error),
                 notification_type="warning" if error.uncertain else "danger",
@@ -220,7 +258,7 @@ class AccountPayment(models.Model):
             # its response is inconsistent. Preserve the key and block new attempts.
             attempt.mark_error("invalid_create_response", str(error), uncertain=True)
             return self._mercadopago_point_notification(
-                _("Mercado Pago Point"),
+                _("Mercado Pago QR" if order_type == "qr" else "Mercado Pago Point"),
                 _(
                     "Mercado Pago may have created the Order but returned inconsistent data. "
                     "The same attempt and idempotency key were preserved for recovery."
@@ -236,19 +274,22 @@ class AccountPayment(models.Model):
     def action_mercadopago_point_refresh(self):
         """Explicitly query the latest remote Order; never post accounting entries."""
         self.ensure_one()
-        if not self.is_mercadopago_point:
-            raise UserError(_("The selected payment method is not Mercado Pago Point."))
+        if not self.is_mercadopago_order:
+            raise UserError(_("The selected payment method is not a Mercado Pago Orders method."))
         attempt = self.mercadopago_point_current_order_id
         if not attempt:
-            raise UserError(_("This payment has no Point attempts."))
+            raise UserError(_("This payment has no Mercado Pago attempts."))
+        expected_type = "qr" if self.is_mercadopago_qr else "point"
+        if attempt.order_type != expected_type:
+            raise UserError(_("The latest attempt does not match the selected payment method."))
         attempt = attempt.sudo()
         if not attempt.mp_order_id:
             raise UserError(_(
-                "The last request has no recoverable Order ID. Use Enviar al Point again; "
+                "The last request has no recoverable Order ID. Use the same send action again; "
                 "it will reuse the same idempotency key."
             ))
         if attempt.config_id.environment != "test":
-            raise UserError(_("Production is disabled in Stage 1."))
+            raise UserError(_("Production is disabled in the current implementation stage."))
         try:
             attempt._refresh_from_api()
         except MercadoPagoClientError as error:
@@ -258,7 +299,7 @@ class AccountPayment(models.Model):
                 "last_sync_at": fields.Datetime.now(),
             })
             return self._mercadopago_point_notification(
-                _("Mercado Pago Point"),
+                _("Mercado Pago"),
                 str(error),
                 notification_type="warning",
                 sticky=True,
@@ -270,14 +311,14 @@ class AccountPayment(models.Model):
                 "last_sync_at": fields.Datetime.now(),
             })
             return self._mercadopago_point_notification(
-                _("Mercado Pago Point"),
+                _("Mercado Pago"),
                 str(error),
                 notification_type="danger",
                 sticky=True,
             )
         return self._mercadopago_point_notification(
-            _("Mercado Pago Point"),
-            _("Point Order status updated: %s") % (attempt.status or attempt.state),
+            _("Mercado Pago"),
+            _("Order status updated: %s") % (attempt.status or attempt.state),
             notification_type="success" if attempt.is_verified_success else "info",
         )
 
@@ -292,18 +333,21 @@ class AccountPayment(models.Model):
 
     def _mercadopago_point_validate_before_post(self):
         """Pure local barrier. This method must never perform network calls."""
-        for payment in self.filtered("is_mercadopago_point"):
+        for payment in self.filtered("is_mercadopago_order"):
+            expected_type = "qr" if payment.is_mercadopago_qr else "point"
             expected_amount = _format_exact_point_amount(payment.amount)
-            successful = payment.mercadopago_point_order_ids.filtered("is_verified_success")
+            successful = payment.mercadopago_point_order_ids.filtered(
+                lambda order: order.is_verified_success and order.order_type == expected_type
+            )
             if len(successful) != 1:
                 raise UserError(_(
-                    "A Point payment can only be posted with exactly one verified "
+                    "A Mercado Pago payment can only be posted with exactly one matching verified "
                     "processed/accredited Order."
                 ))
             order = successful[0]
             if order.currency_id != payment.currency_id or order.requested_amount_text != expected_amount:
                 raise UserError(_(
-                    "The verified Point Order amount or currency does not match the Odoo payment."
+                    "The verified Mercado Pago Order amount or currency does not match the Odoo payment."
                 ))
             if not _decimal_equal(order.paid_amount_text, expected_amount):
                 raise UserError(_(
@@ -312,6 +356,6 @@ class AccountPayment(models.Model):
         return True
 
     def action_post(self):
-        # Safety barrier only. All network I/O lives in the explicit Point actions.
+        # Safety barrier only. All network I/O lives in explicit Mercado Pago actions.
         self._mercadopago_point_validate_before_post()
         return super().action_post()

@@ -1,6 +1,7 @@
 /** @odoo-module **/
 
 import {
+    canCancelQr,
     nextPollDelay,
     shouldContinuePolling,
 } from "@mercadopago_point_odoo/js/point_tracking";
@@ -24,5 +25,11 @@ QUnit.module("mercadopago_point_odoo", () => {
         assert.strictEqual(nextPollDelay(90), 10000);
         assert.ok(shouldContinuePolling(active, 2));
         assert.notOk(shouldContinuePolling(active, 3));
+    });
+
+    QUnit.test("QR cancellation is never exposed to Point attempts", (assert) => {
+        assert.ok(canCancelQr({ order_type: "qr", can_cancel_qr: true }));
+        assert.notOk(canCancelQr({ order_type: "point", can_cancel_qr: true }));
+        assert.notOk(canCancelQr({ order_type: "qr", can_cancel_qr: false }));
     });
 });

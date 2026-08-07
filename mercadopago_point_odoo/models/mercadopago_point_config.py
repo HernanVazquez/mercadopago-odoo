@@ -1,4 +1,4 @@
-"""Backend-only configuration for Mercado Pago Point Orders."""
+"""Backend-only configuration for Mercado Pago Point and QR Orders."""
 
 from odoo import api, fields, models, _
 from odoo.exceptions import ValidationError
@@ -6,12 +6,13 @@ from psycopg2 import IntegrityError
 
 
 ACTIVE_TERMINAL_INDEX = "mercadopago_point_config_active_terminal_unique"
+ACTIVE_EXTERNAL_POS_INDEX = "mercadopago_point_config_active_external_pos_unique"
 
 
 class MercadoPagoPointConfig(models.Model):
     _name = "mercadopago.point.config"
-    _description = "Mercado Pago Point Configuration"
-    _order = "company_id, environment, terminal_id, id"
+    _description = "Mercado Pago Orders Configuration"
+    _order = "company_id, environment, integration_type, terminal_id, external_pos_id, id"
     _check_company_auto = True
 
     name = fields.Char(required=True)
@@ -29,6 +30,12 @@ class MercadoPagoPointConfig(models.Model):
         default="test",
         index=True,
     )
+    integration_type = fields.Selection(
+        selection=[("point", "Point"), ("qr", "QR")],
+        required=True,
+        default="point",
+        index=True,
+    )
     access_token = fields.Char(
         string="Access Token",
         required=True,
@@ -38,9 +45,21 @@ class MercadoPagoPointConfig(models.Model):
     )
     terminal_id = fields.Char(
         string="Terminal ID",
-        required=True,
         copy=False,
         index=True,
+    )
+    external_pos_id = fields.Char(
+        string="External POS ID",
+        copy=False,
+        index=True,
+        help="External ID of the externally provisioned fixed-amount QR cash register.",
+    )
+    qr_mode = fields.Selection(
+        selection=[("hybrid", "Hybrid")],
+        string="QR Mode",
+        default="hybrid",
+        copy=False,
+        help="Stage 2.5 supports the official hybrid QR mode only.",
     )
     timeout_seconds = fields.Integer(
         string="HTTP Timeout (seconds)",
@@ -61,48 +80,73 @@ class MercadoPagoPointConfig(models.Model):
             ON mercadopago_point_config (company_id, environment, terminal_id)
             WHERE active
         """)
+        self.env.cr.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS
+                mercadopago_point_config_active_external_pos_unique
+            ON mercadopago_point_config (company_id, environment, external_pos_id)
+            WHERE active AND integration_type = 'qr'
+        """)
+
+    @staticmethod
+    def _normalize_identifiers(vals):
+        vals = dict(vals)
+        if vals.get("integration_type") == "point":
+            vals["external_pos_id"] = False
+        elif vals.get("integration_type") == "qr":
+            vals["terminal_id"] = False
+        for field_name in ("terminal_id", "external_pos_id"):
+            if field_name in vals and vals[field_name]:
+                vals[field_name] = vals[field_name].strip()
+        return vals
+
+    @staticmethod
+    def _unique_error(error):
+        constraint_name = error.diag.constraint_name
+        if constraint_name == ACTIVE_TERMINAL_INDEX:
+            return _(
+                "Only one active Point configuration is allowed for the same "
+                "company, environment, and terminal."
+            )
+        if constraint_name == ACTIVE_EXTERNAL_POS_INDEX:
+            return _(
+                "Only one active QR configuration is allowed for the same "
+                "company, environment, and external POS ID."
+            )
+        return False
 
     @api.model_create_multi
     def create(self, vals_list):
         normalized_vals_list = []
         for vals in vals_list:
-            vals = dict(vals)
-            if "terminal_id" in vals and vals["terminal_id"]:
-                vals["terminal_id"] = vals["terminal_id"].strip()
-            normalized_vals_list.append(vals)
+            normalized_vals_list.append(self._normalize_identifiers(vals))
         try:
             with self.env.cr.savepoint():
                 return super().create(normalized_vals_list)
         except IntegrityError as error:
-            if error.diag.constraint_name != ACTIVE_TERMINAL_INDEX:
+            message = self._unique_error(error)
+            if not message:
                 raise
-            raise ValidationError(_(
-                "Only one active Point configuration is allowed for the same "
-                "company, environment, and terminal."
-            )) from error
+            raise ValidationError(message) from error
 
     def write(self, vals):
-        vals = dict(vals)
-        if "terminal_id" in vals and vals["terminal_id"]:
-            vals["terminal_id"] = vals["terminal_id"].strip()
+        vals = self._normalize_identifiers(vals)
         try:
             with self.env.cr.savepoint():
                 return super().write(vals)
         except IntegrityError as error:
-            if error.diag.constraint_name != ACTIVE_TERMINAL_INDEX:
+            message = self._unique_error(error)
+            if not message:
                 raise
-            raise ValidationError(_(
-                "Only one active Point configuration is allowed for the same "
-                "company, environment, and terminal."
-            )) from error
+            raise ValidationError(message) from error
 
-    @api.constrains("company_id", "environment", "terminal_id", "active")
+    @api.constrains("company_id", "environment", "terminal_id", "integration_type", "active")
     def _check_unique_active_terminal(self):
-        for config in self.filtered("active"):
+        for config in self.filtered(lambda record: record.active and record.integration_type == "point"):
             duplicate = self.search_count([
                 ("id", "!=", config.id),
                 ("company_id", "=", config.company_id.id),
                 ("environment", "=", config.environment),
+                ("integration_type", "=", "point"),
                 ("terminal_id", "=", config.terminal_id),
                 ("active", "=", True),
             ])
@@ -112,16 +156,42 @@ class MercadoPagoPointConfig(models.Model):
                     "company, environment, and terminal."
                 ))
 
+    @api.constrains("company_id", "environment", "external_pos_id", "integration_type", "active")
+    def _check_unique_active_external_pos(self):
+        for config in self.filtered(
+            lambda record: record.active and record.integration_type == "qr"
+        ):
+            duplicate = self.search_count([
+                ("id", "!=", config.id),
+                ("company_id", "=", config.company_id.id),
+                ("environment", "=", config.environment),
+                ("integration_type", "=", "qr"),
+                ("external_pos_id", "=", config.external_pos_id),
+                ("active", "=", True),
+            ])
+            if duplicate:
+                raise ValidationError(_(
+                    "Only one active QR configuration is allowed for the same "
+                    "company, environment, and external POS ID."
+                ))
+
     @api.constrains("timeout_seconds")
     def _check_timeout_seconds(self):
         for config in self:
             if not 1 <= config.timeout_seconds <= 60:
                 raise ValidationError(_("The HTTP timeout must be between 1 and 60 seconds."))
 
-    @api.constrains("terminal_id", "access_token")
+    @api.constrains(
+        "integration_type", "terminal_id", "external_pos_id", "qr_mode", "access_token"
+    )
     def _check_required_values_not_blank(self):
         for config in self:
-            if not (config.terminal_id or "").strip():
+            if config.integration_type == "point" and not (config.terminal_id or "").strip():
                 raise ValidationError(_("Terminal ID cannot be blank."))
+            if config.integration_type == "qr":
+                if not (config.external_pos_id or "").strip():
+                    raise ValidationError(_("External POS ID cannot be blank for QR."))
+                if config.qr_mode != "hybrid":
+                    raise ValidationError(_("Stage 2.5 only supports hybrid QR mode."))
             if not (config.sudo().access_token or "").strip():
                 raise ValidationError(_("Access Token cannot be blank."))

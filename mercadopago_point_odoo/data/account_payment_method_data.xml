@@ -11,4 +11,9 @@
         <field name="code">mercadopago_point</field>
         <field name="payment_type">inbound</field>
     </record>
+    <record id="account_payment_method_mercadopago_qr" model="account.payment.method">
+        <field name="name">Mercado Pago QR</field>
+        <field name="code">mercadopago_qr</field>
+        <field name="payment_type">inbound</field>
+    </record>
 </odoo>

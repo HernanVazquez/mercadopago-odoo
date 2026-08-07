@@ -4,7 +4,7 @@
         <field name="name">mercadopago.point.tracking.wizard.form</field>
         <field name="model">mercadopago.point.tracking.wizard</field>
         <field name="arch" type="xml">
-            <form string="Cobro Mercado Pago Point" create="false" edit="false">
+            <form string="Cobro Mercado Pago" create="false" edit="false">
                 <field name="order_id" invisible="1"/>
                 <field name="tracking_widget"
                        widget="mercadopago_point_tracking"

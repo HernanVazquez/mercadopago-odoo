@@ -8,7 +8,9 @@
                 <field name="name"/>
                 <field name="company_id" groups="base.group_multi_company"/>
                 <field name="environment"/>
-                <field name="terminal_id"/>
+                <field name="integration_type"/>
+                <field name="terminal_id" optional="show"/>
+                <field name="external_pos_id" optional="show"/>
                 <field name="timeout_seconds"/>
                 <field name="active"/>
             </tree>
@@ -19,22 +21,28 @@
         <field name="name">mercadopago.point.config.form</field>
         <field name="model">mercadopago.point.config</field>
         <field name="arch" type="xml">
-            <form string="Mercado Pago Point Configuration">
+            <form string="Mercado Pago Orders Configuration">
                 <sheet>
                     <div class="alert alert-warning" role="alert"
                          attrs="{'invisible': [('environment', '!=', 'production')]}">
-                        Production calls are disabled in Stage 1. This configuration cannot be
-                        assigned to a Point payment method line yet.
+                        Production calls are disabled in this stage. This configuration cannot be
+                        assigned to a Mercado Pago payment method line yet.
                     </div>
                     <group>
                         <group>
                             <field name="name"/>
                             <field name="company_id" options="{'no_create': True}"/>
                             <field name="environment"/>
+                            <field name="integration_type"/>
                             <field name="active"/>
                         </group>
                         <group>
-                            <field name="terminal_id"/>
+                            <field name="terminal_id"
+                                   attrs="{'invisible': [('integration_type', '!=', 'point')], 'required': [('integration_type', '=', 'point')]}"/>
+                            <field name="external_pos_id"
+                                   attrs="{'invisible': [('integration_type', '!=', 'qr')], 'required': [('integration_type', '=', 'qr')]}"/>
+                            <field name="qr_mode"
+                                   attrs="{'invisible': [('integration_type', '!=', 'qr')], 'required': [('integration_type', '=', 'qr')]}"/>
                             <field name="access_token" password="True" groups="base.group_system"/>
                             <field name="timeout_seconds"/>
                         </group>
@@ -45,14 +53,14 @@
     </record>
 
     <record id="action_mercadopago_point_config" model="ir.actions.act_window">
-        <field name="name">Mercado Pago Point</field>
+        <field name="name">Mercado Pago Orders</field>
         <field name="res_model">mercadopago.point.config</field>
         <field name="view_mode">tree,form</field>
         <field name="context">{'default_environment': 'test'}</field>
     </record>
 
     <menuitem id="menu_mercadopago_point_config"
-              name="Mercado Pago Point"
+              name="Mercado Pago Orders"
               parent="account.menu_finance_configuration"
               action="action_mercadopago_point_config"
               sequence="90"

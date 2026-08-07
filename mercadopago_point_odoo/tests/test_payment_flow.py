@@ -33,8 +33,9 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
             )
 
     def _created_response(self, attempt):
-        return {
+        response = {
             "id": "ORDER-%s" % attempt.id,
+            "type": attempt.order_type,
             "external_reference": attempt.external_reference,
             "status": "created",
             "status_detail": "created",
@@ -47,10 +48,21 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
                 }],
             },
         }
+        if attempt.order_type == "qr":
+            response.update({
+                "total_amount": attempt.requested_amount_text,
+                "config": {"qr": {
+                    "external_pos_id": attempt.external_pos_id,
+                    "mode": attempt.qr_mode,
+                }},
+                "type_response": {"qr_data": "000201-test-qr-data"},
+            })
+        return response
 
     def _processed_response(self, attempt, paid_amount=None):
         return {
             "id": attempt.mp_order_id,
+            "type": attempt.order_type,
             "external_reference": attempt.external_reference,
             "status": "processed",
             "status_detail": "processed",
@@ -61,13 +73,24 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
                     "paid_amount": paid_amount or attempt.requested_amount_text,
                     "status": "processed",
                     "status_detail": "accredited",
-                    "payment_method": {
+                    "payment_method": ({
+                        "type": "account_money",
+                        "id": "account_money",
+                    } if attempt.order_type == "qr" else {
                         "type": "credit_card",
                         "id": "visa",
                         "installments": 3,
-                    },
+                    }),
                 }],
             },
+            **({
+                "total_amount": attempt.requested_amount_text,
+                "config": {"qr": {
+                    "external_pos_id": attempt.external_pos_id,
+                    "mode": attempt.qr_mode,
+                }},
+                "type_response": {"qr_data": "000201-test-qr-data"},
+            } if attempt.order_type == "qr" else {}),
         }
 
     def test_method_is_detected_by_master_technical_code(self):
@@ -77,6 +100,16 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
         self.assertEqual(
             payment.payment_method_line_id.payment_method_id.code,
             "mercadopago_point",
+        )
+
+    def test_qr_method_is_separate_and_does_not_create_journal_lines(self):
+        payment = self._create_qr_payment()
+        self.assertEqual(self.qr_lines_created_automatically, 0)
+        self.assertTrue(payment.is_mercadopago_qr)
+        self.assertFalse(payment.is_mercadopago_point)
+        self.assertEqual(
+            payment.payment_method_line_id.payment_method_id.code,
+            "mercadopago_qr",
         )
 
     def test_posting_is_blocked_without_verified_order(self):
@@ -144,6 +177,22 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
                 "timeout_seconds": 10,
             })
 
+    def test_active_qr_config_scope_cannot_be_ambiguous(self):
+        with self.assertRaises(ValidationError):
+            self.env["mercadopago.point.config"].create({
+                "name": "Ambiguous QR TEST",
+                "company_id": self.company.id,
+                "environment": "test",
+                "integration_type": "qr",
+                "access_token": "TEST-duplicate-qr-token-never-log",
+                "external_pos_id": " QR_POS_TEST_001 ",
+                "qr_mode": "hybrid",
+            })
+
+    def test_configuration_type_must_match_payment_method(self):
+        with self.assertRaises(ValidationError), self.env.cr.savepoint():
+            self.qr_method_line.mercadopago_point_config_id = self.point_config
+
     def test_terminal_failure_keeps_attempt_before_new_one(self):
         payment = self._create_point_payment(80.0)
         first_attempt = payment._mercadopago_point_prepare_attempt(
@@ -165,6 +214,28 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
 
         self.assertEqual(len(payment.mercadopago_point_order_ids), 2)
         self.assertEqual(first_attempt.attempt_number, 1)
+        self.assertEqual(second_attempt.attempt_number, 2)
+        self.assertNotEqual(first_attempt.idempotency_key, second_attempt.idempotency_key)
+
+    def test_qr_failure_keeps_attempt_before_new_one(self):
+        payment = self._create_qr_payment(80.0)
+        first_attempt = payment._mercadopago_point_prepare_attempt(
+            self.qr_config, "80.00", "qr"
+        )
+        failed_response = self._created_response(first_attempt)
+        failed_response.update({"status": "failed", "status_detail": "rejected"})
+        failed_response["transactions"]["payments"][0].update({
+            "status": "failed",
+            "status_detail": "rejected",
+        })
+        first_attempt.apply_api_response(failed_response, verified=True)
+
+        second_attempt = payment._mercadopago_point_prepare_attempt(
+            self.qr_config, "80.00", "qr"
+        )
+
+        self.assertEqual(len(payment.mercadopago_point_order_ids), 2)
+        self.assertEqual(first_attempt.order_type, "qr")
         self.assertEqual(second_attempt.attempt_number, 2)
         self.assertNotEqual(first_attempt.idempotency_key, second_attempt.idempotency_key)
 
@@ -220,6 +291,92 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
         self.assertEqual(payment.state, "posted")
         create_order.assert_not_called()
         get_order.assert_not_called()
+
+    def test_processed_accredited_qr_payment_can_be_posted(self):
+        payment = self._create_qr_payment(100.0)
+
+        def create_order(_client, payload, idempotency_key):
+            attempt = payment.mercadopago_point_order_ids
+            self.assertEqual(payload["type"], "qr")
+            self.assertEqual(payload["total_amount"], "100.00")
+            self.assertEqual(payload["transactions"]["payments"][0]["amount"], "100.00")
+            self.assertEqual(payload["config"]["qr"], {
+                "external_pos_id": "QR_POS_TEST_001",
+                "mode": "hybrid",
+            })
+            self.assertNotIn("expiration_time", payload)
+            self.assertEqual(idempotency_key, attempt.idempotency_key)
+            return self._created_response(attempt)
+
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+            side_effect=create_order,
+        ):
+            payment.action_mercadopago_qr_send()
+
+        attempt = payment.mercadopago_point_order_ids
+        self.assertEqual(attempt.order_type, "qr")
+        self.assertEqual(attempt.external_pos_id, "QR_POS_TEST_001")
+        self.assertEqual(attempt.qr_mode, "hybrid")
+        self.assertEqual(attempt.qr_data, "000201-test-qr-data")
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
+            "MercadoPagoOrdersClient.get_order",
+            autospec=True,
+            return_value=self._processed_response(attempt),
+        ):
+            payment.action_mercadopago_point_refresh()
+
+        self.assertTrue(attempt.is_verified_success)
+        self.assertEqual(attempt.paid_amount_text, "100.00")
+        self.assertEqual(attempt.payment_method_type, "account_money")
+        self.assertEqual(attempt.payment_method_id, "account_money")
+        self.assertEqual(attempt.installments, 0)
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+        ) as create_order, patch(
+            "odoo.addons.mercadopago_point_odoo.models.mercadopago_point_order."
+            "MercadoPagoOrdersClient.get_order",
+            autospec=True,
+        ) as get_order:
+            payment.action_post()
+        self.assertEqual(payment.state, "posted")
+        create_order.assert_not_called()
+        get_order.assert_not_called()
+
+    def test_point_approval_cannot_post_a_qr_payment(self):
+        payment = self._create_point_payment(40.0)
+        attempt = payment._mercadopago_point_prepare_attempt(
+            self.point_config, "40.00", "point"
+        )
+        attempt.write({"mp_order_id": "ORDER-POINT", "mp_payment_id": "PAYMENT-POINT"})
+        attempt.apply_api_response(self._processed_response(attempt), verified=True)
+        payment.payment_method_line_id = self.qr_method_line
+        with self.assertRaises(UserError):
+            payment.action_post()
+
+    def test_qr_response_rejects_wrong_type_pos_total_and_reference(self):
+        for mutation in ("type", "pos", "total", "reference"):
+            with self.subTest(mutation=mutation):
+                payment = self._create_qr_payment(30.0)
+                attempt = payment._mercadopago_point_prepare_attempt(
+                    self.qr_config, "30.00", "qr"
+                )
+                response = self._created_response(attempt)
+                if mutation == "type":
+                    response["type"] = "point"
+                elif mutation == "pos":
+                    response["config"]["qr"]["external_pos_id"] = "OTHER_POS"
+                elif mutation == "total":
+                    response["total_amount"] = "30.01"
+                else:
+                    response["external_reference"] = "unexpected-reference"
+                with self.assertRaises(ValidationError):
+                    attempt.apply_api_response(response)
 
     def test_paid_amount_difference_never_enables_posting(self):
         payment = self._create_point_payment(100.0)
@@ -301,4 +458,27 @@ class TestMercadoPagoPointPaymentFlow(MercadoPagoPointCommon):
 
         self.assertEqual(len(payment.mercadopago_point_order_ids), 1)
         self.assertEqual(attempt.idempotency_key, original_key)
+        self.assertEqual(attempt.state, "uncertain")
+
+    def test_qr_timeout_reuses_attempt_and_idempotency_key(self):
+        payment = self._create_qr_payment(50.0)
+        error = MercadoPagoNetworkError(
+            "Unknown network result",
+            code="network_error",
+            uncertain=True,
+        )
+        with patch(
+            "odoo.addons.mercadopago_point_odoo.models.account_payment."
+            "MercadoPagoOrdersClient.create_order",
+            autospec=True,
+            side_effect=error,
+        ):
+            payment.action_mercadopago_qr_send()
+            attempt = payment.mercadopago_point_order_ids
+            original_key = attempt.idempotency_key
+            payment.action_mercadopago_qr_send()
+
+        self.assertEqual(len(payment.mercadopago_point_order_ids), 1)
+        self.assertEqual(attempt.idempotency_key, original_key)
+        self.assertEqual(attempt.order_type, "qr")
         self.assertEqual(attempt.state, "uncertain")

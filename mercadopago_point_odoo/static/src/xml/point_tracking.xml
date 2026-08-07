@@ -81,6 +81,14 @@
                         Aplicar escenario TEST
                     </button>
                 </div>
+                <div t-if="state.snapshot.can_cancel_qr" class="mt-4">
+                    <h4>Order QR TEST</h4>
+                    <p class="text-muted">La aprobación o el rechazo se prueba escaneando el QR de la caja con un comprador TEST.</p>
+                    <button type="button" class="btn btn-outline-danger"
+                            t-on-click="cancelQr" t-att-disabled="state.busy">
+                        Cancelar Order QR TEST
+                    </button>
+                </div>
             </t>
         </div>
     </t>

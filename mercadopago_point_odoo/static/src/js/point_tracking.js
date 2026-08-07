@@ -24,6 +24,10 @@ export function nextPollDelay(elapsedSeconds) {
     return 2500;
 }
 
+export function canCancelQr(snapshot) {
+    return Boolean(snapshot?.order_type === "qr" && snapshot.can_cancel_qr);
+}
+
 export class MercadoPagoPointTracking extends Component {
     setup() {
         this.orm = useService("orm");
@@ -194,6 +198,32 @@ export class MercadoPagoPointTracking extends Component {
             }
         } catch (error) {
             this.notification.add(error.message || "No se pudo aplicar la simulación TEST.", {
+                type: "danger",
+            });
+        } finally {
+            this.state.busy = false;
+            this.scheduleNextPoll();
+        }
+    }
+
+    async cancelQr() {
+        if (this.state.busy || !canCancelQr(this.state.snapshot)) {
+            return;
+        }
+        this.clearTimer();
+        this.state.busy = true;
+        try {
+            const snapshot = await this.orm.call(
+                "mercadopago.point.tracking.wizard",
+                "cancel_test_qr",
+                [[this.wizardId]]
+            );
+            this.applySnapshot(snapshot);
+            if (snapshot.cancel_error) {
+                this.notification.add(snapshot.cancel_error, { type: "warning" });
+            }
+        } catch (error) {
+            this.notification.add(error.message || "No se pudo cancelar la Order QR TEST.", {
                 type: "danger",
             });
         } finally {

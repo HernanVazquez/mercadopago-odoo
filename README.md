@@ -1,6 +1,6 @@
-# Mercado Pago Point para Odoo 16
+# Mercado Pago Point y QR para Odoo 16
 
-Integración entre Odoo 16 Community y Mercado Pago Point mediante la API Orders. La Etapa 1 permite configurar una terminal virtual TEST, habilitar el método entrante `Mercado Pago Point` en un diario, enviar explícitamente el importe de un `account.payment`, consultar manualmente la Order y bloquear la publicación contable hasta verificar un resultado `processed/accredited` por el mismo importe.
+Integración entre Odoo 16 Community y Mercado Pago Point/QR mediante la API Orders. Permite configurar dispositivos TEST, habilitar por separado los métodos entrantes `Mercado Pago Point` y `Mercado Pago QR`, enviar explícitamente el importe exacto de un `account.payment`, seguir la Order y bloquear la publicación contable hasta verificar un resultado `processed/accredited` del mismo canal e importe.
 
 El importe siempre lo determina Odoo. El terminal no puede recibir propinas, permitir carga manual, aplicar tolerancias ni modificar el monto. Un pago parcial requiere crear primero una línea `account.payment` por ese importe parcial.
 

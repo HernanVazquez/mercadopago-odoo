@@ -1,4 +1,4 @@
-"""Small, model-independent HTTP client for Mercado Pago Point Orders API."""
+"""Small, model-independent HTTP client for Mercado Pago Orders API."""
 
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
@@ -81,6 +81,37 @@ def build_point_order_payload(external_reference, amount_text, terminal_id):
         "external_reference": external_reference,
         "transactions": {"payments": [{"amount": amount_text}]},
         "config": {"point": {"terminal_id": terminal_id.strip()}},
+    }
+
+
+def build_qr_order_payload(external_reference, amount_text, external_pos_id):
+    """Build a fixed-amount hybrid QR payload controlled exclusively by Odoo.
+
+    ``total_amount`` and the single transaction amount deliberately use the
+    same exact value from ``account.payment``. The externally provisioned POS
+    must have ``fixed_amount=true``; customers can never enter or alter it.
+    """
+    if not EXTERNAL_REFERENCE_RE.fullmatch(external_reference or ""):
+        raise ValueError("Invalid external reference format.")
+    if not (external_pos_id or "").strip():
+        raise ValueError("External POS ID is required.")
+    try:
+        amount = Decimal(str(amount_text))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError("Invalid QR amount.") from error
+    if amount <= 0 or amount.as_tuple().exponent != -2:
+        raise ValueError("QR amount must be positive and have exactly two decimals.")
+    return {
+        "type": "qr",
+        "total_amount": amount_text,
+        "external_reference": external_reference,
+        "config": {
+            "qr": {
+                "external_pos_id": external_pos_id.strip(),
+                "mode": "hybrid",
+            },
+        },
+        "transactions": {"payments": [{"amount": amount_text}]},
     }
 
 
@@ -344,4 +375,17 @@ class MercadoPagoOrdersClient:
             expected_status=204,
             payload=payload,
             expect_json=False,
+        )
+
+    def cancel_order(self, order_id, idempotency_key):
+        """Cancel a created Order; callers must always follow this with GET."""
+        if not order_id:
+            raise ValueError("Order ID is required.")
+        if not idempotency_key:
+            raise ValueError("Cancellation idempotency key is required.")
+        return self._request(
+            "POST",
+            "/v1/orders/%s/cancel" % order_id,
+            expected_status=200,
+            idempotency_key=idempotency_key,
         )

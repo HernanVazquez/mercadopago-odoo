@@ -14,7 +14,12 @@
                 <button name="action_mercadopago_point_refresh"
                         type="object"
                         string="Consultar estado"
-                        attrs="{'invisible': ['|', ('is_mercadopago_point', '=', False), ('mercadopago_point_can_refresh', '=', False)]}"/>
+                        attrs="{'invisible': ['|', ('is_mercadopago_order', '=', False), ('mercadopago_point_can_refresh', '=', False)]}"/>
+                <button name="action_mercadopago_qr_send"
+                        type="object"
+                        string="Cobrar con QR"
+                        class="oe_highlight"
+                        attrs="{'invisible': ['|', ('is_mercadopago_qr', '=', False), ('state', '!=', 'draft')]}"/>
             </xpath>
 
             <xpath expr="//sheet/div[@name='button_box']" position="inside">
@@ -23,16 +28,18 @@
                         class="oe_stat_button"
                         icon="fa-credit-card"
                         attrs="{'invisible': [('mercadopago_point_order_count', '=', 0)]}">
-                    <field name="mercadopago_point_order_count" widget="statinfo" string="Point Attempts"/>
+                    <field name="mercadopago_point_order_count" widget="statinfo" string="MP Attempts"/>
                 </button>
             </xpath>
 
             <xpath expr="//sheet" position="inside">
                 <field name="is_mercadopago_point" invisible="1"/>
+                <field name="is_mercadopago_qr" invisible="1"/>
+                <field name="is_mercadopago_order" invisible="1"/>
                 <field name="mercadopago_point_can_refresh" invisible="1"/>
                 <field name="mercadopago_point_current_order_id" invisible="1"/>
-                <group string="Mercado Pago Point"
-                       attrs="{'invisible': [('is_mercadopago_point', '=', False)]}">
+                <group string="Mercado Pago Orders"
+                       attrs="{'invisible': [('is_mercadopago_order', '=', False)]}">
                     <field name="mercadopago_point_state" readonly="1"/>
                     <field name="mercadopago_point_order_ids"
                            readonly="1"
@@ -41,6 +48,7 @@
                         <tree create="false" delete="false">
                             <field name="currency_id" invisible="1"/>
                             <field name="attempt_number"/>
+                            <field name="order_type"/>
                             <field name="requested_amount"/>
                             <field name="paid_amount"/>
                             <field name="status"/>
@@ -61,11 +69,13 @@
             <xpath expr="//field[@name='inbound_payment_method_line_ids']/tree/field[@name='payment_method_id']"
                    position="after">
                 <field name="mercadopago_point_is_method" invisible="1"/>
+                <field name="mercadopago_qr_is_method" invisible="1"/>
+                <field name="mercadopago_point_config_type" invisible="1"/>
                 <field name="mercadopago_point_config_id"
-                       string="Point Configuration"
-                       domain="[('company_id', '=', parent.company_id), ('active', '=', True), ('environment', '=', 'test')]"
+                       string="Mercado Pago Configuration"
+                       domain="[('company_id', '=', parent.company_id), ('active', '=', True), ('environment', '=', 'test'), ('integration_type', '=', mercadopago_point_config_type)]"
                        options="{'no_create': True, 'no_open': True}"
-                       attrs="{'invisible': [('mercadopago_point_is_method', '=', False)], 'required': [('mercadopago_point_is_method', '=', True)]}"/>
+                       attrs="{'invisible': ['&amp;', ('mercadopago_point_is_method', '=', False), ('mercadopago_qr_is_method', '=', False)], 'required': ['|', ('mercadopago_point_is_method', '=', True), ('mercadopago_qr_is_method', '=', True)]}"/>
             </xpath>
         </field>
     </record>

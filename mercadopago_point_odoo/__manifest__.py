@@ -1,6 +1,6 @@
 {
     "name": "Mercado Pago Point",
-    "version": "16.0.2.0.0",
+    "version": "16.0.2.5.0",
     "license": "LGPL-3",
     "depends": ["account", "web"],
     "external_dependencies": {"python": ["requests"]},

@@ -1,11 +1,12 @@
-"""Persistent and auditable Point Order attempts linked to accounting payments."""
+"""Persistent and auditable Mercado Pago Order attempts linked to payments."""
 
 from decimal import Decimal, InvalidOperation
+import uuid
 
 from odoo import api, fields, models, _
 from odoo.exceptions import UserError, ValidationError
 
-from ..services.client import MercadoPagoOrdersClient
+from ..services.client import MercadoPagoClientError, MercadoPagoOrdersClient
 
 
 POINT_ORDER_STATES = [
@@ -47,7 +48,7 @@ def _decimal_equal(left, right):
 
 class MercadoPagoPointOrder(models.Model):
     _name = "mercadopago.point.order"
-    _description = "Mercado Pago Point Order Attempt"
+    _description = "Mercado Pago Order Attempt"
     _order = "payment_id, attempt_number desc, id desc"
     _rec_name = "external_reference"
     _check_company_auto = True
@@ -70,9 +71,21 @@ class MercadoPagoPointOrder(models.Model):
         ondelete="restrict",
         check_company=True,
     )
+    order_type = fields.Selection(
+        selection=[("point", "Point"), ("qr", "QR")],
+        required=True,
+        default="point",
+        readonly=True,
+        index=True,
+    )
     attempt_number = fields.Integer(required=True, readonly=True)
     external_reference = fields.Char(required=True, readonly=True, index=True, copy=False)
     idempotency_key = fields.Char(required=True, readonly=True, index=True, copy=False)
+    cancel_idempotency_key = fields.Char(
+        readonly=True,
+        copy=False,
+        groups="base.group_system",
+    )
     mp_order_id = fields.Char(string="Mercado Pago Order ID", readonly=True, index=True, copy=False)
     mp_payment_id = fields.Char(string="Mercado Pago Payment ID", readonly=True, index=True, copy=False)
 
@@ -97,7 +110,20 @@ class MercadoPagoPointOrder(models.Model):
     payment_method_type = fields.Char(string="Actual Payment Method", readonly=True)
     payment_method_id = fields.Char(string="Card Brand / Payment Method ID", readonly=True)
     installments = fields.Integer(readonly=True)
-    terminal_id = fields.Char(required=True, readonly=True)
+    terminal_id = fields.Char(readonly=True)
+    external_pos_id = fields.Char(string="External POS ID", readonly=True)
+    qr_mode = fields.Selection(
+        selection=[("hybrid", "Hybrid")],
+        string="QR Mode",
+        readonly=True,
+    )
+    qr_data = fields.Text(
+        string="QR Data",
+        readonly=True,
+        copy=False,
+        groups="base.group_system",
+        help="QR payload returned by Mercado Pago. It is stored but not rendered in Stage 2.5.",
+    )
 
     sent_at = fields.Datetime(readonly=True)
     last_sync_at = fields.Datetime(readonly=True)
@@ -127,6 +153,11 @@ class MercadoPagoPointOrder(models.Model):
             "idempotency_key_unique",
             "unique(idempotency_key)",
             "The Mercado Pago idempotency key must be unique.",
+        ),
+        (
+            "cancel_idempotency_key_unique",
+            "unique(cancel_idempotency_key)",
+            "The Mercado Pago cancellation idempotency key must be unique.",
         ),
         (
             "mp_order_id_unique",
@@ -169,13 +200,24 @@ class MercadoPagoPointOrder(models.Model):
                 and _decimal_equal(order.requested_amount_text, order.paid_amount_text)
             )
 
-    @api.constrains("config_id", "payment_id")
+    @api.constrains("config_id", "payment_id", "order_type", "terminal_id", "external_pos_id", "qr_mode")
     def _check_config_company(self):
         for order in self:
             if order.config_id.company_id != order.payment_id.company_id:
                 raise ValidationError(_(
                     "The Point configuration and the Odoo payment must belong to the same company."
                 ))
+            if order.config_id.integration_type != order.order_type:
+                raise ValidationError(_(
+                    "The attempt type must match its Mercado Pago configuration type."
+                ))
+            if order.order_type == "point" and not (order.terminal_id or "").strip():
+                raise ValidationError(_("A Point attempt requires a Terminal ID."))
+            if order.order_type == "qr":
+                if not (order.external_pos_id or "").strip():
+                    raise ValidationError(_("A QR attempt requires an External POS ID."))
+                if order.qr_mode != "hybrid":
+                    raise ValidationError(_("Stage 2.5 only supports hybrid QR attempts."))
 
     def _extract_payment_values(self, response_data):
         payments = response_data.get("transactions", {}).get("payments", [])
@@ -233,6 +275,31 @@ class MercadoPagoPointOrder(models.Model):
             raise ValidationError(_("Mercado Pago returned an Order without an ID."))
         if self.mp_order_id and self.mp_order_id != remote_order_id:
             raise ValidationError(_("Mercado Pago returned an unexpected Order ID."))
+        remote_type = response_data.get("type")
+        if remote_type != self.order_type:
+            raise ValidationError(_("Mercado Pago returned an unexpected Order type."))
+
+        type_response = response_data.get("type_response") or {}
+        if not isinstance(type_response, dict):
+            raise ValidationError(_("Mercado Pago returned an invalid type response."))
+        if self.order_type == "qr":
+            remote_total = response_data.get("total_amount")
+            if not _decimal_equal(self.requested_amount_text, remote_total):
+                raise ValidationError(_(
+                    "Mercado Pago returned a QR total amount different from the amount sent by Odoo."
+                ))
+            remote_config = response_data.get("config") or {}
+            if not isinstance(remote_config, dict):
+                raise ValidationError(_("Mercado Pago returned an invalid Order configuration."))
+            remote_qr_config = remote_config.get("qr") or {}
+            if not isinstance(remote_qr_config, dict):
+                raise ValidationError(_("Mercado Pago returned an invalid QR configuration."))
+            remote_external_pos = remote_qr_config.get("external_pos_id")
+            if remote_external_pos and remote_external_pos != self.external_pos_id:
+                raise ValidationError(_("Mercado Pago returned an unexpected External POS ID."))
+            remote_mode = remote_qr_config.get("mode")
+            if remote_mode and remote_mode != self.qr_mode:
+                raise ValidationError(_("Mercado Pago returned an unexpected QR mode."))
 
         remote_status = response_data.get("status") or False
         values = {
@@ -245,6 +312,11 @@ class MercadoPagoPointOrder(models.Model):
             "error_code": False,
             "error_message": False,
         }
+        remote_qr_data = type_response.get("qr_data")
+        if remote_qr_data:
+            if not isinstance(remote_qr_data, str):
+                raise ValidationError(_("Mercado Pago returned invalid QR data."))
+            values["qr_data"] = remote_qr_data
         payment_values = self._extract_payment_values(response_data)
         if (
             self.mp_payment_id
@@ -283,6 +355,8 @@ class MercadoPagoPointOrder(models.Model):
     def _send_test_simulation_event(self, payload):
         """Send an official TEST event; never write a simulated final state locally."""
         self.ensure_one()
+        if self.order_type != "point":
+            raise UserError(_("The TEST events endpoint is only available for Point Orders."))
         if self.config_id.environment != "test":
             raise UserError(_("Point result simulation is only available in TEST."))
         if self.payment_id.state != "draft":
@@ -296,6 +370,32 @@ class MercadoPagoPointOrder(models.Model):
         self._mercadopago_point_client().simulate_order_event(self.mp_order_id, payload)
         return True
 
+    def _cancel_test_qr_and_refresh(self):
+        """Cancel a TEST QR remotely and always recover its state with GET."""
+        self.ensure_one()
+        if self.order_type != "qr":
+            raise UserError(_("This action is only available for QR Orders."))
+        if self.config_id.environment != "test":
+            raise UserError(_("QR cancellation is only available in TEST."))
+        if self.payment_id.state != "draft":
+            raise UserError(_("Only Orders for draft Odoo payments can be canceled."))
+        if not self.payment_id.is_mercadopago_qr:
+            raise UserError(_("The selected payment method is not Mercado Pago QR."))
+        if not self.mp_order_id or self.state != "created":
+            raise UserError(_("This QR Order can no longer be canceled."))
+        client = self._mercadopago_point_client()
+        if not self.cancel_idempotency_key:
+            self.write({"cancel_idempotency_key": str(uuid.uuid4())})
+        cancel_error = False
+        try:
+            client.cancel_order(self.mp_order_id, self.cancel_idempotency_key)
+        except MercadoPagoClientError as error:
+            cancel_error = str(error)
+        # A mutating POST may have succeeded even if its response was lost.
+        # GET is mandatory and is the only source of the new local state.
+        self._refresh_from_api()
+        return cancel_error
+
     def action_open_tracking(self):
         self.ensure_one()
         wizard = self.env["mercadopago.point.tracking.wizard"].create({
@@ -303,7 +403,7 @@ class MercadoPagoPointOrder(models.Model):
         })
         return {
             "type": "ir.actions.act_window",
-            "name": _("Mercado Pago Point"),
+            "name": _("Mercado Pago QR" if self.order_type == "qr" else "Mercado Pago Point"),
             "res_model": "mercadopago.point.tracking.wizard",
             "res_id": wizard.id,
             "view_mode": "form",

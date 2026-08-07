@@ -88,6 +88,7 @@ class MercadoPagoPointTrackingWizard(models.TransientModel):
         return {
             "attempt_id": order.id,
             "attempt_number": order.attempt_number,
+            "order_type": order.order_type,
             "requested_amount": order.requested_amount_text,
             "paid_amount": order.paid_amount_text or False,
             "currency": order.currency_id.name,
@@ -107,10 +108,18 @@ class MercadoPagoPointTrackingWizard(models.TransientModel):
             "is_final": status in FINAL_REMOTE_STATES,
             "is_verified_success": verified_success,
             "can_simulate": bool(
-                order.config_id.environment == "test"
+                order.order_type == "point"
+                and order.config_id.environment == "test"
                 and payment.state == "draft"
                 and order.mp_order_id
                 and order.state in SIMULATABLE_REMOTE_STATES
+            ),
+            "can_cancel_qr": bool(
+                order.order_type == "qr"
+                and order.config_id.environment == "test"
+                and payment.state == "draft"
+                and order.mp_order_id
+                and order.state == "created"
             ),
             "is_test": order.config_id.environment == "test",
             "simulation_options": {
@@ -160,6 +169,8 @@ class MercadoPagoPointTrackingWizard(models.TransientModel):
         # Explicit duplicate backend protection; the model service checks too.
         if order.config_id.environment != "test":
             raise UserError(_("Point result simulation is only available in TEST."))
+        if order.order_type != "point":
+            raise UserError(_("The TEST events endpoint is only available for Point Orders."))
         try:
             payload = build_simulation_event_payload(
                 scenario,
@@ -191,4 +202,18 @@ class MercadoPagoPointTrackingWizard(models.TransientModel):
         snapshot = self._snapshot()
         if simulation_error:
             snapshot["simulation_error"] = simulation_error
+        return snapshot
+
+    def cancel_test_qr(self):
+        """POST the official QR cancellation and immediately GET the Order."""
+        self.ensure_one()
+        try:
+            cancel_error = self.order_id.sudo()._cancel_test_qr_and_refresh()
+        except (MercadoPagoClientError, ValidationError, ValueError, UserError) as error:
+            snapshot = self._snapshot()
+            snapshot["poll_error"] = str(error)
+            return snapshot
+        snapshot = self._snapshot()
+        if cancel_error:
+            snapshot["cancel_error"] = cancel_error
         return snapshot

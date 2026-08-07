@@ -11,6 +11,7 @@ from odoo.addons.mercadopago_point_odoo.services.client import (
     MercadoPagoNetworkError,
     MercadoPagoOrdersClient,
     build_point_order_payload,
+    build_qr_order_payload,
     build_simulation_event_payload,
 )
 
@@ -74,6 +75,24 @@ class TestMercadoPagoOrdersClient(TransactionCase):
         )
         self.assertNotIn("TEST-secret-token", str(result))
 
+    def test_cancel_order_uses_official_endpoint(self):
+        session = Mock()
+        response = Mock(status_code=200)
+        response.json.return_value = {"id": "ORDER-QR-1", "status": "canceled"}
+        session.request.return_value = response
+        client = MercadoPagoOrdersClient("TEST-secret-token", session=session)
+
+        result = client.cancel_order("ORDER-QR-1", "cancel-key")
+
+        self.assertEqual(result["status"], "canceled")
+        call = session.request.call_args
+        self.assertEqual(
+            call.args[:2],
+            ("POST", "https://api.mercadopago.com/v1/orders/ORDER-QR-1/cancel"),
+        )
+        self.assertIsNone(call.kwargs["json"])
+        self.assertEqual(call.kwargs["headers"]["X-Idempotency-Key"], "cancel-key")
+
     def test_simulation_api_error_never_exposes_token(self):
         session = Mock()
         response = Mock(status_code=400)
@@ -111,6 +130,33 @@ class TestMercadoPagoOrdersClient(TransactionCase):
                 "123.456",
                 "VIRTUAL_POINT_TEST_001",
             )
+
+    def test_qr_payload_uses_the_exact_odoo_amount_twice(self):
+        payload = build_qr_order_payload(
+            "odoo-ap-qr-test",
+            "100.00",
+            " QR_POS_TEST_001 ",
+        )
+        self.assertEqual(payload, {
+            "type": "qr",
+            "total_amount": "100.00",
+            "external_reference": "odoo-ap-qr-test",
+            "config": {
+                "qr": {
+                    "external_pos_id": "QR_POS_TEST_001",
+                    "mode": "hybrid",
+                },
+            },
+            "transactions": {"payments": [{"amount": "100.00"}]},
+        })
+        self.assertNotIn("expiration_time", payload)
+        self.assertNotIn("tip", str(payload).lower())
+
+    def test_qr_payload_rejects_blank_pos_and_rounding(self):
+        with self.assertRaises(ValueError):
+            build_qr_order_payload("odoo-ap-qr-test", "100.00", " ")
+        with self.assertRaises(ValueError):
+            build_qr_order_payload("odoo-ap-qr-test", "100.001", "QR_POS")
 
     def test_create_order_sends_idempotency_and_timeout(self):
         session = Mock()
