@@ -57,7 +57,7 @@ class AccountPaymentMethodLine(models.Model):
     )
     mercadopago_point_config_id = fields.Many2one(
         comodel_name="mercadopago.point.config",
-        string="Mercado Pago Point Configuration",
+        string="Mercado Pago Configuration",
         ondelete="restrict",
         check_company=True,
         copy=False,
@@ -89,8 +89,8 @@ class AccountPaymentMethodLine(models.Model):
                 ))
             if not is_mercadopago and config:
                 raise ValidationError(_(
-                    "A Mercado Pago Point configuration can only be assigned to the "
-                    "Mercado Pago Point payment method."
+                    "A Mercado Pago configuration can only be assigned to a "
+                    "Mercado Pago payment method."
                 ))
             if not config:
                 continue
@@ -101,11 +101,11 @@ class AccountPaymentMethodLine(models.Model):
                 ))
             if line.journal_id.company_id != config.company_id:
                 raise ValidationError(_(
-                    "The Point configuration and the journal must belong to the same company."
+                    "The Mercado Pago configuration and the journal must belong to the same company."
                 ))
             if not config.active:
-                raise ValidationError(_("The selected Point configuration is inactive."))
+                raise ValidationError(_("The selected Mercado Pago configuration is inactive."))
             if config.environment != "test":
                 raise ValidationError(_(
-                    "Production Point configurations cannot be enabled in this implementation stage."
+                    "Production Mercado Pago configurations cannot be enabled in this implementation stage."
                 ))

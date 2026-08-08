@@ -1,5 +1,5 @@
 {
-    "name": "Mercado Pago Point",
+    "name": "Mercado Pago Point y QR",
     "version": "16.0.2.5.0",
     "license": "LGPL-3",
     "depends": ["account", "web"],

@@ -1,6 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
-access_mercadopago_point_config_account_user,Point configuration read for accounting users,model_mercadopago_point_config,account.group_account_user,1,0,0,0
-access_mercadopago_point_config_system,Point configuration administration,model_mercadopago_point_config,base.group_system,1,1,1,1
-access_mercadopago_point_order_account_user,Point Order read for accounting users,model_mercadopago_point_order,account.group_account_user,1,0,0,0
-access_mercadopago_point_order_system,Point Order read for administrators,model_mercadopago_point_order,base.group_system,1,0,0,0
-access_mercadopago_point_tracking_account_user,Point tracking for accounting users,model_mercadopago_point_tracking_wizard,account.group_account_user,1,1,1,1
+access_mercadopago_point_config_account_user,Mercado Pago configuration read for accounting users,model_mercadopago_point_config,account.group_account_user,1,0,0,0
+access_mercadopago_point_config_system,Mercado Pago configuration administration,model_mercadopago_point_config,base.group_system,1,1,1,1
+access_mercadopago_point_order_account_user,Mercado Pago Order read for accounting users,model_mercadopago_point_order,account.group_account_user,1,0,0,0
+access_mercadopago_point_order_system,Mercado Pago Order read for administrators,model_mercadopago_point_order,base.group_system,1,0,0,0
+access_mercadopago_point_tracking_account_user,Mercado Pago tracking for accounting users,model_mercadopago_point_tracking_wizard,account.group_account_user,1,1,1,1

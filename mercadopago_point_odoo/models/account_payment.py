@@ -49,7 +49,7 @@ class AccountPayment(models.Model):
     mercadopago_point_order_ids = fields.One2many(
         comodel_name="mercadopago.point.order",
         inverse_name="payment_id",
-        string="Mercado Pago Point Attempts",
+        string="Mercado Pago Attempts",
         copy=False,
         readonly=True,
     )
@@ -59,11 +59,11 @@ class AccountPayment(models.Model):
     mercadopago_point_current_order_id = fields.Many2one(
         comodel_name="mercadopago.point.order",
         compute="_compute_mercadopago_point_display",
-        string="Current Point Attempt",
+        string="Current Mercado Pago Attempt",
     )
     mercadopago_point_state = fields.Char(
         compute="_compute_mercadopago_point_display",
-        string="Point Status",
+        string="Mercado Pago Status",
     )
     is_mercadopago_point = fields.Boolean(
         compute="_compute_is_mercadopago_point",

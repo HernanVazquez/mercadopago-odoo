@@ -19,14 +19,14 @@ from ..services.client import (
 STATUS_LABELS = {
     "created": "Esperando pago",
     "at_terminal": "Esperando pago",
-    "action_required": "Esperando acción en el Point",
+    "action_required": "Esperando acción del cliente",
     "processed": "Pago acreditado",
     "failed": "Pago rechazado",
     "canceled": "Operación cancelada",
     "expired": "Operación vencida",
     "refunded": "Pago reembolsado",
     "uncertain": "Resultado pendiente de verificación",
-    "sent": "Enviando al Point",
+    "sent": "Enviando a Mercado Pago",
     "error": "Error de integración",
 }
 
@@ -60,7 +60,7 @@ REJECTION_LABELS = {
 
 class MercadoPagoPointTrackingWizard(models.TransientModel):
     _name = "mercadopago.point.tracking.wizard"
-    _description = "Mercado Pago Point Payment Tracking"
+    _description = "Mercado Pago Payment Tracking"
 
     order_id = fields.Many2one(
         comodel_name="mercadopago.point.order",

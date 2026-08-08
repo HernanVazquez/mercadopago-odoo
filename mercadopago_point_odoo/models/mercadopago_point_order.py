@@ -100,7 +100,7 @@ class MercadoPagoPointOrder(models.Model):
     requested_amount_text = fields.Char(
         required=True,
         readonly=True,
-        help="Exact two-decimal amount string sent by Odoo to Point.",
+        help="Exact two-decimal amount string sent by Odoo to Mercado Pago.",
     )
     paid_amount = fields.Monetary(currency_field="currency_id", readonly=True)
     paid_amount_text = fields.Char(
@@ -172,7 +172,7 @@ class MercadoPagoPointOrder(models.Model):
         (
             "requested_amount_positive",
             "CHECK(requested_amount > 0)",
-            "The requested Point amount must be positive.",
+            "The requested Mercado Pago amount must be positive.",
         ),
     ]
 
@@ -205,7 +205,7 @@ class MercadoPagoPointOrder(models.Model):
         for order in self:
             if order.config_id.company_id != order.payment_id.company_id:
                 raise ValidationError(_(
-                    "The Point configuration and the Odoo payment must belong to the same company."
+                    "The Mercado Pago configuration and the Odoo payment must belong to the same company."
                 ))
             if order.config_id.integration_type != order.order_type:
                 raise ValidationError(_(
@@ -222,7 +222,7 @@ class MercadoPagoPointOrder(models.Model):
     def _extract_payment_values(self, response_data):
         payments = response_data.get("transactions", {}).get("payments", [])
         if not isinstance(payments, list) or len(payments) != 1:
-            raise ValidationError(_("The Point Order response must contain exactly one payment."))
+            raise ValidationError(_("The Mercado Pago Order response must contain exactly one payment."))
         payment_data = payments[0]
         if not isinstance(payment_data, dict):
             raise ValidationError(_("Mercado Pago returned an invalid payment structure."))
@@ -348,7 +348,7 @@ class MercadoPagoPointOrder(models.Model):
         if self.config_id.environment != "test":
             raise UserError(_("Production is disabled in the current implementation stage."))
         if not self.mp_order_id:
-            raise UserError(_("The Point attempt does not have a Mercado Pago Order ID."))
+            raise UserError(_("The Mercado Pago attempt does not have an Order ID."))
         response_data = self._mercadopago_point_client().get_order(self.mp_order_id)
         return self.apply_api_response(response_data, verified=True)
 
@@ -431,6 +431,6 @@ class MercadoPagoPointOrder(models.Model):
         protected = self.filtered(lambda order: order.sent_at or order.mp_order_id)
         if protected:
             raise UserError(_(
-                "Point attempts that were sent or have a Mercado Pago Order ID cannot be deleted."
+                "Mercado Pago attempts that were sent or have an Order ID cannot be deleted."
             ))
         return super().unlink()
