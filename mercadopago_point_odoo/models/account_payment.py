@@ -124,10 +124,6 @@ class AccountPayment(models.Model):
             raise UserError(_("The Mercado Pago configuration belongs to another company."))
         if not config.active:
             raise UserError(_("The Mercado Pago configuration is inactive."))
-        if config.environment != "test":
-            raise UserError(_(
-                "Production is disabled. Select a TEST Mercado Pago configuration."
-            ))
         if config.integration_type != order_type:
             raise UserError(_("The configuration type does not match the selected payment method."))
         return config
@@ -190,6 +186,25 @@ class AccountPayment(models.Model):
             "qr_mode": config.qr_mode if order_type == "qr" else False,
         })
 
+    def _mercadopago_point_is_existing_recovery(self, config, amount_text, order_type):
+        """Identify the exact idempotent recovery path without mutating an attempt."""
+        self.ensure_one()
+        attempts = self.mercadopago_point_order_ids.sorted(
+            key=lambda order: (order.attempt_number, order.id), reverse=True
+        )
+        latest = attempts[:1]
+        return bool(
+            latest
+            and latest.state in {"sent", "uncertain"}
+            and not latest.mp_order_id
+            and latest.requested_amount_text == amount_text
+            and latest.currency_id == self.currency_id
+            and latest.config_id == config
+            and latest.order_type == order_type
+            and (order_type != "point" or latest.terminal_id == config.terminal_id)
+            and (order_type != "qr" or latest.external_pos_id == config.external_pos_id)
+        )
+
     @staticmethod
     def _mercadopago_point_notification(title, message, notification_type="info", sticky=False):
         return {
@@ -220,6 +235,11 @@ class AccountPayment(models.Model):
     def _mercadopago_send(self, order_type):
         self.ensure_one()
         config, amount_text = self._mercadopago_point_validate_send(order_type)
+        existing_recovery = self._mercadopago_point_is_existing_recovery(
+            config, amount_text, order_type
+        )
+        # Do not create or mutate an attempt while new Production operations are disabled.
+        config._ensure_new_production_order_allowed(existing_recovery=existing_recovery)
         attempt = self._mercadopago_point_prepare_attempt(config, amount_text, order_type)
         if order_type == "qr":
             payload = build_qr_order_payload(
@@ -240,6 +260,8 @@ class AccountPayment(models.Model):
             timeout=secure_config.timeout_seconds,
         )
         try:
+            # Defense in depth at the remote mutation boundary.
+            config._ensure_new_production_order_allowed(existing_recovery=existing_recovery)
             response_data = client.create_order(payload, attempt.idempotency_key)
             attempt.apply_api_response(response_data, verified=False)
         except MercadoPagoClientError as error:
@@ -288,8 +310,6 @@ class AccountPayment(models.Model):
                 "The last request has no recoverable Order ID. Use the same send action again; "
                 "it will reuse the same idempotency key."
             ))
-        if attempt.config_id.environment != "test":
-            raise UserError(_("Production is disabled in the current implementation stage."))
         try:
             attempt._refresh_from_api()
         except MercadoPagoClientError as error:

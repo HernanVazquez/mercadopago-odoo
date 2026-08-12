@@ -1,12 +1,13 @@
 """Backend-only configuration for Mercado Pago Point and QR Orders."""
 
 from odoo import api, fields, models, _
-from odoo.exceptions import ValidationError
+from odoo.exceptions import UserError, ValidationError
 from psycopg2 import IntegrityError
 
 
 ACTIVE_TERMINAL_INDEX = "mercadopago_point_config_active_terminal_unique"
 ACTIVE_EXTERNAL_POS_INDEX = "mercadopago_point_config_active_external_pos_unique"
+PRODUCTION_ENABLED_PARAMETER = "mercadopago_point_odoo.production_enabled"
 
 
 class MercadoPagoPointConfig(models.Model):
@@ -41,7 +42,7 @@ class MercadoPagoPointConfig(models.Model):
         required=True,
         copy=False,
         groups="base.group_system",
-        help="Private TEST credential. It is used only in backend requests and must never be logged.",
+        help="Private backend credential for Mercado Pago. It must never be logged.",
     )
     terminal_id = fields.Char(
         string="Terminal ID",
@@ -86,6 +87,28 @@ class MercadoPagoPointConfig(models.Model):
             ON mercadopago_point_config (company_id, environment, external_pos_id)
             WHERE active AND integration_type = 'qr'
         """)
+
+    @api.model
+    def _production_enabled(self):
+        """Return the global switch with a safe false default."""
+        value = self.env["ir.config_parameter"].sudo().get_param(
+            PRODUCTION_ENABLED_PARAMETER, default="False"
+        )
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _ensure_new_production_order_allowed(self, existing_recovery=False):
+        """Authorize starting a new remote Order; GET operations are unaffected."""
+        self.ensure_one()
+        if (
+            self.environment == "production"
+            and not existing_recovery
+            and not self._production_enabled()
+        ):
+            raise UserError(_(
+                "Las nuevas operaciones de Mercado Pago Production están deshabilitadas. "
+                "Un administrador debe habilitarlas en Ajustes antes de iniciar una cobranza real."
+            ))
+        return True
 
     @staticmethod
     def _normalize_identifiers(vals):

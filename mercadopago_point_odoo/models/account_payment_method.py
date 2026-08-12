@@ -105,7 +105,3 @@ class AccountPaymentMethodLine(models.Model):
                 ))
             if not config.active:
                 raise ValidationError(_("The selected Mercado Pago configuration is inactive."))
-            if config.environment != "test":
-                raise ValidationError(_(
-                    "Production Mercado Pago configurations cannot be enabled in this implementation stage."
-                ))

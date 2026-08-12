@@ -345,8 +345,6 @@ class MercadoPagoPointOrder(models.Model):
     def _refresh_from_api(self):
         """GET and verify this attempt without changing any accounting state."""
         self.ensure_one()
-        if self.config_id.environment != "test":
-            raise UserError(_("Production is disabled in the current implementation stage."))
         if not self.mp_order_id:
             raise UserError(_("The Mercado Pago attempt does not have an Order ID."))
         response_data = self._mercadopago_point_client().get_order(self.mp_order_id)

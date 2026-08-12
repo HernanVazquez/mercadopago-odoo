@@ -73,7 +73,7 @@
                 <field name="mercadopago_point_config_type" invisible="1"/>
                 <field name="mercadopago_point_config_id"
                        string="Mercado Pago Configuration"
-                       domain="[('company_id', '=', parent.company_id), ('active', '=', True), ('environment', '=', 'test'), ('integration_type', '=', mercadopago_point_config_type)]"
+                       domain="[('company_id', '=', parent.company_id), ('active', '=', True), ('integration_type', '=', mercadopago_point_config_type)]"
                        options="{'no_create': True, 'no_open': True}"
                        attrs="{'invisible': ['&amp;', ('mercadopago_point_is_method', '=', False), ('mercadopago_qr_is_method', '=', False)], 'required': ['|', ('mercadopago_point_is_method', '=', True), ('mercadopago_qr_is_method', '=', True)]}"/>
             </xpath>

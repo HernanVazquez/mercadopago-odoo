@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form_mercadopago_point" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.mercadopago.point</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[hasclass('settings')]" position="inside">
+                <div class="app_settings_block"
+                     data-string="Mercado Pago"
+                     string="Mercado Pago"
+                     data-key="mercadopago_point_odoo"
+                     groups="base.group_system">
+                    <h2>Mercado Pago</h2>
+                    <div class="row mt16 o_settings_container">
+                        <div class="col-12 col-lg-6 o_setting_box">
+                            <div class="o_setting_right_pane">
+                                <span class="o_form_label">Estado de Producción</span>
+                                <div class="text-muted">
+                                    Controla solamente el inicio de nuevas cobranzas reales en Mercado Pago Production.
+                                    Las Orders productivas existentes siempre podrán consultarse y verificarse.
+                                </div>
+                                <div class="content-group mt16">
+                                    <field name="mercadopago_production_enabled" invisible="1"/>
+                                    <strong><field name="mercadopago_production_status" readonly="1"/></strong>
+                                    <button name="action_enable_mercadopago_production"
+                                            type="object"
+                                            string="Habilitar Producción"
+                                            class="btn-primary ms-3"
+                                            attrs="{'invisible': [('mercadopago_production_enabled', '=', True)]}"/>
+                                    <button name="action_disable_mercadopago_production"
+                                            type="object"
+                                            string="Deshabilitar Producción"
+                                            class="btn-secondary ms-3"
+                                            attrs="{'invisible': [('mercadopago_production_enabled', '=', False)]}"/>
+                                    <button name="%(action_mercadopago_production_audit)d"
+                                            type="action"
+                                            string="Ver historial de cambios"
+                                            class="btn-link"/>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="view_mercadopago_production_confirmation_form" model="ir.ui.view">
+        <field name="name">mercadopago.production.confirmation.form</field>
+        <field name="model">mercadopago.production.confirmation</field>
+        <field name="arch" type="xml">
+            <form string="Confirmar cambio de Production" create="false" edit="false">
+                <field name="previous_state" invisible="1"/>
+                <field name="target_state" invisible="1"/>
+                <div class="alert alert-warning" role="alert">
+                    <field name="warning_message" nolabel="1" readonly="1"/>
+                </div>
+                <footer>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                    <button name="action_confirm"
+                            type="object"
+                            string="Confirmar habilitación"
+                            class="btn-primary"
+                            attrs="{'invisible': [('target_state', '=', False)]}"/>
+                    <button name="action_confirm"
+                            type="object"
+                            string="Confirmar deshabilitación"
+                            class="btn-primary"
+                            attrs="{'invisible': [('target_state', '=', True)]}"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_mercadopago_production_audit_tree" model="ir.ui.view">
+        <field name="name">mercadopago.production.audit.tree</field>
+        <field name="model">mercadopago.production.audit</field>
+        <field name="arch" type="xml">
+            <tree create="false" edit="false" delete="false">
+                <field name="changed_at"/>
+                <field name="user_id"/>
+                <field name="previous_state"/>
+                <field name="new_state"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_mercadopago_production_audit_form" model="ir.ui.view">
+        <field name="name">mercadopago.production.audit.form</field>
+        <field name="model">mercadopago.production.audit</field>
+        <field name="arch" type="xml">
+            <form create="false" edit="false" delete="false">
+                <sheet>
+                    <group>
+                        <field name="changed_at"/>
+                        <field name="user_id"/>
+                        <field name="previous_state"/>
+                        <field name="new_state"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+</odoo>

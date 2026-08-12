@@ -4,3 +4,5 @@ access_mercadopago_point_config_system,Mercado Pago configuration administration
 access_mercadopago_point_order_account_user,Mercado Pago Order read for accounting users,model_mercadopago_point_order,account.group_account_user,1,0,0,0
 access_mercadopago_point_order_system,Mercado Pago Order read for administrators,model_mercadopago_point_order,base.group_system,1,0,0,0
 access_mercadopago_point_tracking_account_user,Mercado Pago tracking for accounting users,model_mercadopago_point_tracking_wizard,account.group_account_user,1,1,1,1
+access_mercadopago_production_confirmation_system,Mercado Pago Production confirmation,model_mercadopago_production_confirmation,base.group_system,1,1,1,1
+access_mercadopago_production_audit_system,Mercado Pago Production audit,model_mercadopago_production_audit,base.group_system,1,0,0,0

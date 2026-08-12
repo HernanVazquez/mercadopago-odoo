@@ -12,6 +12,7 @@
         "views/mercadopago_point_order_views.xml",
         "views/mercadopago_point_tracking_views.xml",
         "views/account_payment_views.xml",
+        "views/mercadopago_production_views.xml",
     ],
     "assets": {
         "web.assets_backend": [
