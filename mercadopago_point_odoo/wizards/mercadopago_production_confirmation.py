@@ -10,6 +10,11 @@ class MercadoPagoProductionConfirmation(models.TransientModel):
     _name = "mercadopago.production.confirmation"
     _description = "Confirm Mercado Pago Production Status Change"
 
+    settings_id = fields.Many2one(
+        comodel_name="res.config.settings",
+        readonly=True,
+        ondelete="cascade",
+    )
     previous_state = fields.Boolean(required=True, readonly=True)
     target_state = fields.Boolean(required=True, readonly=True)
     warning_message = fields.Text(compute="_compute_warning_message", readonly=True)
@@ -48,7 +53,9 @@ class MercadoPagoProductionConfirmation(models.TransientModel):
                 "Ciérrela e intente nuevamente."
             ))
         if current_state == self.target_state:
-            return {"type": "ir.actions.act_window_close"}
+            if self.settings_id:
+                self.settings_id.mercadopago_production_enabled = current_state
+            return {"type": "ir.actions.client", "tag": "reload"}
         self.env["ir.config_parameter"].sudo().set_param(
             PRODUCTION_ENABLED_PARAMETER,
             "True" if self.target_state else "False",
@@ -59,4 +66,8 @@ class MercadoPagoProductionConfirmation(models.TransientModel):
             "previous_state": current_state,
             "new_state": self.target_state,
         })
-        return {"type": "ir.actions.act_window_close"}
+        if self.settings_id:
+            self.settings_id.mercadopago_production_enabled = self.target_state
+        # Close the modal and reload Settings so its transient is rebuilt from
+        # the parameter just committed by this explicit confirmation.
+        return {"type": "ir.actions.client", "tag": "reload"}

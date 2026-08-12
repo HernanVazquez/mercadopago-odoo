@@ -51,6 +51,7 @@
         <field name="model">mercadopago.production.confirmation</field>
         <field name="arch" type="xml">
             <form string="Confirmar cambio de Production" create="false" edit="false">
+                <field name="settings_id" invisible="1"/>
                 <field name="previous_state" invisible="1"/>
                 <field name="target_state" invisible="1"/>
                 <div class="alert alert-warning" role="alert">

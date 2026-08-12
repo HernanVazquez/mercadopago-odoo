@@ -206,8 +206,12 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         action = settings.action_enable_mercadopago_production()
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
         wizard = self.env[action["res_model"]].browse(action["res_id"])
-        wizard.action_confirm()
+        result = wizard.action_confirm()
+        self.assertEqual(result, {"type": "ir.actions.client", "tag": "reload"})
         self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
+        reloaded_settings = self.env["res.config.settings"].create({})
+        self.assertTrue(reloaded_settings.mercadopago_production_enabled)
+        self.assertEqual(reloaded_settings.mercadopago_production_status, "Habilitado")
         enabled_audit = self.env["mercadopago.production.audit"].search([], limit=1)
         self.assertEqual(enabled_audit.user_id, self.env.user)
         self.assertFalse(enabled_audit.previous_state)
@@ -217,11 +221,48 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         action = settings.action_disable_mercadopago_production()
         self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
         wizard = self.env[action["res_model"]].browse(action["res_id"])
-        wizard.action_confirm()
+        result = wizard.action_confirm()
+        self.assertEqual(result, {"type": "ir.actions.client", "tag": "reload"})
         disabled_audit = self.env["mercadopago.production.audit"].search([], limit=1)
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
+        reloaded_settings = self.env["res.config.settings"].create({})
+        self.assertFalse(reloaded_settings.mercadopago_production_enabled)
+        self.assertEqual(reloaded_settings.mercadopago_production_status, "Deshabilitado")
         self.assertTrue(disabled_audit.previous_state)
         self.assertFalse(disabled_audit.new_state)
+
+    def test_new_settings_always_loads_live_production_parameter(self):
+        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "True")
+        enabled_settings = self.env["res.config.settings"].create({})
+        self.assertTrue(enabled_settings.mercadopago_production_enabled)
+        self.assertEqual(enabled_settings.mercadopago_production_status, "Habilitado")
+        self.assertTrue(enabled_settings.get_values()["mercadopago_production_enabled"])
+
+        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "False")
+        disabled_settings = self.env["res.config.settings"].create({})
+        self.assertFalse(disabled_settings.mercadopago_production_enabled)
+        self.assertEqual(disabled_settings.mercadopago_production_status, "Deshabilitado")
+        self.assertFalse(disabled_settings.get_values()["mercadopago_production_enabled"])
+
+    def test_stale_settings_cannot_overwrite_confirmed_production_state(self):
+        stale_settings = self.env["res.config.settings"].create({})
+        self.assertFalse(stale_settings.mercadopago_production_enabled)
+        confirming_settings = self.env["res.config.settings"].create({})
+        action = confirming_settings.action_enable_mercadopago_production()
+        wizard = self.env[action["res_model"]].browse(action["res_id"])
+        wizard.action_confirm()
+        self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
+        self.assertTrue(confirming_settings.mercadopago_production_enabled)
+        self.assertFalse(stale_settings.mercadopago_production_enabled)
+
+        # set_values synchronizes the field with the live parameter before
+        # Odoo's standard config_parameter persistence can write anything.
+        stale_settings.set_values()
+        self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
+        audits = self.env["mercadopago.production.audit"].search([])
+        self.assertEqual(len(audits), 1)
+        self.assertFalse(audits.previous_state)
+        self.assertTrue(audits.new_state)
 
     def test_canceling_confirmation_does_not_change_parameter(self):
         settings = self.env["res.config.settings"].create({})

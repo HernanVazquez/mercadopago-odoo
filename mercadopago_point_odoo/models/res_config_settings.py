@@ -1,6 +1,6 @@
 """Administrative Settings entry point for Mercado Pago Production calls."""
 
-from odoo import fields, models, _
+from odoo import api, fields, models, _
 from odoo.exceptions import AccessError
 
 from .mercadopago_point_config import PRODUCTION_ENABLED_PARAMETER
@@ -11,20 +11,31 @@ class ResConfigSettings(models.TransientModel):
 
     mercadopago_production_enabled = fields.Boolean(
         string="Producción habilitada",
-        compute="_compute_mercadopago_production_enabled",
+        readonly=True,
+        config_parameter=PRODUCTION_ENABLED_PARAMETER,
         groups="base.group_system",
     )
     mercadopago_production_status = fields.Char(
         string="Estado de Producción",
-        compute="_compute_mercadopago_production_enabled",
+        compute="_compute_mercadopago_production_status",
         groups="base.group_system",
     )
 
-    def _compute_mercadopago_production_enabled(self):
+    @api.depends("mercadopago_production_enabled")
+    def _compute_mercadopago_production_status(self):
+        for settings in self:
+            settings.mercadopago_production_status = (
+                _("Habilitado")
+                if settings.mercadopago_production_enabled
+                else _("Deshabilitado")
+            )
+
+    def set_values(self):
+        """Never let an old Settings transient revert a confirmed switch."""
         enabled = self.env["mercadopago.point.config"]._production_enabled()
         for settings in self:
             settings.mercadopago_production_enabled = enabled
-            settings.mercadopago_production_status = _("Habilitado") if enabled else _("Deshabilitado")
+        return super().set_values()
 
     def _ensure_mercadopago_system_admin(self):
         if not self.env.user.has_group("base.group_system"):
@@ -36,6 +47,7 @@ class ResConfigSettings(models.TransientModel):
         if current_state == target_state:
             return {"type": "ir.actions.act_window_close"}
         wizard = self.env["mercadopago.production.confirmation"].create({
+            "settings_id": self.id,
             "previous_state": current_state,
             "target_state": target_state,
         })
