@@ -184,10 +184,16 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
             self.point_method_line.mercadopago_point_config_id = production_qr
 
         other_company = self.env["res.company"].create({"name": "Other MP company"})
-        other_config = self.production_config.copy({
+        other_config = self.env["mercadopago.point.config"].with_company(
+            other_company
+        ).create({
             "name": "Other company PROD",
             "company_id": other_company.id,
+            "environment": "production",
+            "integration_type": "point",
+            "access_token": "PROD-other-company-token-never-log",
             "terminal_id": "OTHER_COMPANY_PROD",
+            "timeout_seconds": 10,
         })
         with self.assertRaises((UserError, ValidationError)):
             self.point_method_line.mercadopago_point_config_id = other_config
