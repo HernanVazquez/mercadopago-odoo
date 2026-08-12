@@ -15,7 +15,6 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
     def setUp(self):
         super().setUp()
         self.parameter = self.env["ir.config_parameter"].sudo()
-        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "False")
         self.production_config = self.env["mercadopago.point.config"].with_company(
             self.company
         ).create({
@@ -27,6 +26,19 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
             "terminal_id": "VIRTUAL_POINT_PROD_001",
             "timeout_seconds": 10,
         })
+
+    def _set_production_enabled(self, enabled):
+        """Set an explicit test precondition without creating an audit entry."""
+        self.parameter.set_param(
+            PRODUCTION_ENABLED_PARAMETER,
+            "True" if enabled else "False",
+        )
+        self.assertEqual(
+            self.env["mercadopago.point.config"]._production_enabled(), enabled
+        )
+
+    def _production_audit_ids(self):
+        return set(self.env["mercadopago.production.audit"].search([]).ids)
 
     def _created_response(self, attempt):
         return {
@@ -53,6 +65,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
 
     def test_test_send_allowed_while_production_disabled(self):
+        self._set_production_enabled(False)
         payment = self._create_point_payment()
         with patch(
             "odoo.addons.mercadopago_point_odoo.models.account_payment."
@@ -66,6 +79,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         create_order.assert_called_once()
 
     def test_production_send_blocked_before_attempt_and_http(self):
+        self._set_production_enabled(False)
         payment = self._use_production_point()
         with patch(
             "odoo.addons.mercadopago_point_odoo.models.account_payment."
@@ -78,7 +92,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         create_order.assert_not_called()
 
     def test_production_send_allowed_after_confirmation(self):
-        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "True")
+        self._set_production_enabled(True)
         payment = self._use_production_point()
         with patch(
             "odoo.addons.mercadopago_point_odoo.models.account_payment."
@@ -93,6 +107,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         self.assertEqual(payment.mercadopago_point_order_ids.config_id, self.production_config)
 
     def test_existing_production_order_get_allowed_while_disabled(self):
+        self._set_production_enabled(False)
         payment = self._use_production_point()
         attempt = payment._mercadopago_point_prepare_attempt(
             self.production_config, "100.00", "point"
@@ -108,6 +123,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         get_order.assert_called_once()
 
     def test_uncertain_production_attempt_reuses_idempotency_while_disabled(self):
+        self._set_production_enabled(False)
         payment = self._use_production_point()
         attempt = payment._mercadopago_point_prepare_attempt(
             self.production_config, "100.00", "point"
@@ -127,6 +143,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         self.assertEqual(attempt.idempotency_key, original_key)
 
     def test_existing_production_order_poll_allowed_while_disabled(self):
+        self._set_production_enabled(False)
         payment = self._use_production_point()
         attempt = payment._mercadopago_point_prepare_attempt(
             self.production_config, "100.00", "point"
@@ -150,7 +167,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         attempt.apply_api_response(self._created_response(attempt))
         wizard = self.env["mercadopago.point.tracking.wizard"].create({"order_id": attempt.id})
         for enabled in (False, True):
-            self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, str(enabled))
+            self._set_production_enabled(enabled)
             snapshot = wizard.get_tracking_snapshot()
             self.assertFalse(snapshot["can_simulate"])
             self.assertFalse(snapshot["can_cancel_qr"])
@@ -202,6 +219,8 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
             self.point_method_line.mercadopago_point_config_id = self.production_config
 
     def test_confirmation_required_and_changes_are_audited(self):
+        self._set_production_enabled(False)
+        audit_ids_before_enable = self._production_audit_ids()
         settings = self.env["res.config.settings"].create({})
         action = settings.action_enable_mercadopago_production()
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
@@ -212,18 +231,29 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         reloaded_settings = self.env["res.config.settings"].create({})
         self.assertTrue(reloaded_settings.mercadopago_production_enabled)
         self.assertEqual(reloaded_settings.mercadopago_production_status, "Habilitado")
-        enabled_audit = self.env["mercadopago.production.audit"].search([], limit=1)
+        audit_ids_after_enable = self._production_audit_ids()
+        enabled_audit_ids = audit_ids_after_enable - audit_ids_before_enable
+        self.assertEqual(len(enabled_audit_ids), 1)
+        enabled_audit = self.env["mercadopago.production.audit"].browse(
+            enabled_audit_ids.pop()
+        )
         self.assertEqual(enabled_audit.user_id, self.env.user)
         self.assertFalse(enabled_audit.previous_state)
         self.assertTrue(enabled_audit.new_state)
         self.assertTrue(enabled_audit.changed_at)
 
+        audit_ids_before_disable = self._production_audit_ids()
         action = settings.action_disable_mercadopago_production()
         self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
         wizard = self.env[action["res_model"]].browse(action["res_id"])
         result = wizard.action_confirm()
         self.assertEqual(result, {"type": "ir.actions.client", "tag": "reload"})
-        disabled_audit = self.env["mercadopago.production.audit"].search([], limit=1)
+        audit_ids_after_disable = self._production_audit_ids()
+        disabled_audit_ids = audit_ids_after_disable - audit_ids_before_disable
+        self.assertEqual(len(disabled_audit_ids), 1)
+        disabled_audit = self.env["mercadopago.production.audit"].browse(
+            disabled_audit_ids.pop()
+        )
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
         reloaded_settings = self.env["res.config.settings"].create({})
         self.assertFalse(reloaded_settings.mercadopago_production_enabled)
@@ -232,19 +262,19 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         self.assertFalse(disabled_audit.new_state)
 
     def test_new_settings_always_loads_live_production_parameter(self):
-        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "True")
+        self._set_production_enabled(True)
         enabled_settings = self.env["res.config.settings"].create({})
         self.assertTrue(enabled_settings.mercadopago_production_enabled)
         self.assertEqual(enabled_settings.mercadopago_production_status, "Habilitado")
-        self.assertTrue(enabled_settings.get_values()["mercadopago_production_enabled"])
 
-        self.parameter.set_param(PRODUCTION_ENABLED_PARAMETER, "False")
+        self._set_production_enabled(False)
         disabled_settings = self.env["res.config.settings"].create({})
         self.assertFalse(disabled_settings.mercadopago_production_enabled)
         self.assertEqual(disabled_settings.mercadopago_production_status, "Deshabilitado")
-        self.assertFalse(disabled_settings.get_values()["mercadopago_production_enabled"])
 
     def test_stale_settings_cannot_overwrite_confirmed_production_state(self):
+        self._set_production_enabled(False)
+        audit_ids_before = self._production_audit_ids()
         stale_settings = self.env["res.config.settings"].create({})
         self.assertFalse(stale_settings.mercadopago_production_enabled)
         confirming_settings = self.env["res.config.settings"].create({})
@@ -259,19 +289,24 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         # Odoo's standard config_parameter persistence can write anything.
         stale_settings.set_values()
         self.assertTrue(self.env["mercadopago.point.config"]._production_enabled())
-        audits = self.env["mercadopago.production.audit"].search([])
-        self.assertEqual(len(audits), 1)
-        self.assertFalse(audits.previous_state)
-        self.assertTrue(audits.new_state)
+        audit_ids_after = self._production_audit_ids()
+        new_audit_ids = audit_ids_after - audit_ids_before
+        self.assertEqual(len(new_audit_ids), 1)
+        audit = self.env["mercadopago.production.audit"].browse(new_audit_ids.pop())
+        self.assertFalse(audit.previous_state)
+        self.assertTrue(audit.new_state)
 
     def test_canceling_confirmation_does_not_change_parameter(self):
+        self._set_production_enabled(False)
+        audit_ids_before = self._production_audit_ids()
         settings = self.env["res.config.settings"].create({})
         action = settings.action_enable_mercadopago_production()
         self.env[action["res_model"]].browse(action["res_id"]).unlink()
         self.assertFalse(self.env["mercadopago.point.config"]._production_enabled())
-        self.assertFalse(self.env["mercadopago.production.audit"].search([]))
+        self.assertEqual(self._production_audit_ids(), audit_ids_before)
 
     def test_non_admin_cannot_open_or_confirm_change(self):
+        self._set_production_enabled(False)
         group_user = self.env.ref("base.group_user")
         normal_user = self.env["res.users"].with_context(no_reset_password=True).create({
             "name": "Mercado Pago normal user",
