@@ -195,7 +195,7 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
             "terminal_id": "OTHER_COMPANY_PROD",
             "timeout_seconds": 10,
         })
-        with self.assertRaises((UserError, ValidationError)):
+        with self.assertRaises(ValidationError):
             self.point_method_line.mercadopago_point_config_id = other_config
         self.production_config.active = False
         with self.assertRaises(ValidationError):
