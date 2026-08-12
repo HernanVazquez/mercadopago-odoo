@@ -58,7 +58,7 @@ class MercadoPagoProductionConfirmation(models.TransientModel):
             return {"type": "ir.actions.client", "tag": "reload"}
         self.env["ir.config_parameter"].sudo().set_param(
             PRODUCTION_ENABLED_PARAMETER,
-            "True" if self.target_state else "False",
+            self.target_state,
         )
         self.env["mercadopago.production.audit"].sudo().create({
             "user_id": self.env.user.id,

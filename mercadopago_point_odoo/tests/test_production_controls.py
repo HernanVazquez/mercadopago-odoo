@@ -31,11 +31,18 @@ class TestMercadoPagoProductionControls(MercadoPagoPointCommon):
         """Set an explicit test precondition without creating an audit entry."""
         self.parameter.set_param(
             PRODUCTION_ENABLED_PARAMETER,
-            "True" if enabled else "False",
+            enabled,
         )
         self.assertEqual(
             self.env["mercadopago.point.config"]._production_enabled(), enabled
         )
+        parameter_record = self.parameter.search([
+            ("key", "=", PRODUCTION_ENABLED_PARAMETER),
+        ])
+        if enabled:
+            self.assertEqual(parameter_record.value, "True")
+        else:
+            self.assertFalse(parameter_record)
 
     def _production_audit_ids(self):
         return set(self.env["mercadopago.production.audit"].search([]).ids)
